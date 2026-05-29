@@ -733,7 +733,6 @@ def main(index, methods='hard'):
         # --- C. 刹车等待 (防止落地弹跳导致位移) ---
         # 先拉手刹
         vehicle.apply_control(carla.VehicleControl(hand_brake=True, brake=1.0))
-        mpc = MPC_Controller(vehicle)
         # 让物理引擎空转 20 帧 (约1秒)，等车稳住
         for _ in range(20):
             world.tick()
