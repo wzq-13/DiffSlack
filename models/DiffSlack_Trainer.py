@@ -19,7 +19,7 @@ from models.DiffSlack import AdaNP, AdaNPTest
 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 # DEVICE = torch.device("cpu")
 
-class APF_Hard_Trainer:
+class DiffSlack_Trainer:
     def __init__(self, config, train_dataset, val_dataset, test_dataset=None, save_dir=None, load_dir=None, log_dir=None):
         """Initializes the Trainer with data, method, and configuration."""
         self.config = config
@@ -479,7 +479,7 @@ class APF_Hard_Trainer:
             torch.save(checkpoint, f'{self.save_dir}/epoch_{epoch}.pth')
             print(f'Model checkpoint saved at epoch {epoch} to {self.save_dir}')
             
-    def save_path_data(self, data_loader: DataLoader = None, path_data_dir='/mnt/sim/carla/carla-ue4-0.9.16/PythonAPI/examples/path_data_V2/APF-hard') -> Dict[str, float]:
+    def save_path_data(self, data_loader: DataLoader = None, path_data_dir=None) -> Dict[str, float]:
         self.model.eval()
         os.makedirs(path_data_dir, exist_ok=True)
         if data_loader is None:

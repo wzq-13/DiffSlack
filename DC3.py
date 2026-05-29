@@ -12,7 +12,7 @@ def main():
     config_path = 'configs/DC3.yaml'
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
-    dataset = My_Dataset(data_dir='/home/qian/dataset_V7/', length=200000)
+    dataset = My_Dataset(data_dir='./dataset/', length=200000)
     
     train_size = int(len(dataset) * 0.6)
     val_size = int(len(dataset) * 0.3)
@@ -50,9 +50,9 @@ def main():
                       log_dir=log_dir,
                     )
     # trainer.train(begin_epoch=config['begin_epoch'])
-    # trainer.test()
-    trainer.test_visualization(os.path.join(log_dir, 'test_visualization'))
-    # trainer.save_path_data()
+    trainer.test()
+    # trainer.test_visualization(os.path.join(log_dir, 'test_visualization'))
+    # trainer.save_path_data('./carla/paths/DC3')
 
 if __name__ == "__main__":
     np.random.seed(42)

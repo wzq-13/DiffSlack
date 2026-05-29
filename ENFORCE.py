@@ -20,7 +20,7 @@ def main():
     torch.manual_seed(config['seed'])
     torch.cuda.manual_seed_all(config['seed'])
 
-    dataset = My_Dataset(data_dir='/home/qian/dataset_V7/', length=200000)
+    dataset = My_Dataset(data_dir='./dataset/', length=200000)
     
     train_size = int(len(dataset) * 0.6)
     val_size = int(len(dataset) * 0.3)
@@ -62,7 +62,7 @@ def main():
                     )
     # trainer.train(begin_epoch=config['begin_epoch'])
     trainer.test(test_hard=True)
-    # trainer.save_path_data()
+    # trainer.save_path_data('./carla/paths/ENFORCE')
     # trainer.test_visualization(os.path.join(log_dir, 'test_visualization'))
 
 if __name__ == "__main__":

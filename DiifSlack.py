@@ -2,7 +2,7 @@ import os
 import yaml
 import torch
 import time
-from models.DiffSlack_Trainer import APF_Hard_Trainer
+from models.DiffSlack_Trainer import DiffSlack_Trainer
 from DataLoader.dataload import My_Dataset
 from DataLoader.dataload_IL import My_Dataset_IL, openjson
 from torch.utils.data import DataLoader, Dataset, random_split
@@ -20,7 +20,7 @@ def main():
     torch.manual_seed(config['seed'])
     torch.cuda.manual_seed_all(config['seed'])
 
-    dataset = My_Dataset(data_dir='/home/qian/dataset_V7/', length=200000)
+    dataset = My_Dataset(data_dir='./dataset/', length=200000)
     
     train_size = int(len(dataset) * 0.6)
     val_size = int(len(dataset) * 0.3)
@@ -52,7 +52,7 @@ def main():
         shutil.copy('utils/prob.py', save_prob_file)
     
     test_config = config.copy()
-    trainer = APF_Hard_Trainer(config=test_config,
+    trainer = DiffSlack_Trainer(config=test_config,
                         train_dataset=train_dataset,
                         val_dataset=val_dataset,
                         test_dataset=test_dataset,
@@ -62,7 +62,7 @@ def main():
                     )
     # trainer.train(begin_epoch=300)
     trainer.test(test_hard=True)
-    # trainer.save_path_data()
+    # trainer.save_path_data('./carla/paths/DiffSlack')
     # trainer.test_visualization(os.path.join(log_dir, 'test_visualization'))
 
 if __name__ == "__main__":

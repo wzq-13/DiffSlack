@@ -14,7 +14,7 @@ def main():
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     batch_size = config['batch_size']
-    data_dir = '/home/qian/dataset_V7_NMPC-label/'
+    data_dir = './dataset_NMPC-label/'
     filelist = './IL.json'
     datafilelist = openjson(filelist)['files']
     # dataset = My_Dataset2(data_dir=data_dir, input_dir=input_dir)
@@ -24,7 +24,7 @@ def main():
     torch.cuda.manual_seed_all(config['seed'])
 
     dataset = My_Dataset_IL(data_dir=data_dir, datafilelist=datafilelist)
-    dataset_all = My_Dataset(data_dir='/home/qian/dataset_V7/', length=5000)
+    dataset_all = My_Dataset(data_dir='./dataset/', length=5000)
     
     train_size = int(len(dataset) * 0.8)
     val_size = int((len(dataset) * 0.2))
@@ -64,6 +64,7 @@ def main():
     # trainer.train(begin_epoch=300)
     # trainer.test()
     trainer.test_visualization(os.path.join(log_dir, 'test_visualization'))
+    # trainer.save_path_data('./carla/paths/IL_hard')
 
 if __name__ == "__main__":
     main()

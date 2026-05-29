@@ -295,7 +295,7 @@ class IL_Trainer:
             torch.save(checkpoint, f'{self.save_dir}/epoch_{epoch}.pth')
             print(f'Model checkpoint saved at epoch {epoch} to {self.save_dir}')
             
-    def save_path_data(self, data_loader: DataLoader = None, path_data_dir='/mnt/sim/carla/carla-ue4-0.9.16/PythonAPI/examples/path_data_V2/IL_pure') -> Dict[str, float]:
+    def save_path_data(self, data_loader: DataLoader = None, path_data_dir=None) -> Dict[str, float]:
         self.model.eval()
         os.makedirs(path_data_dir, exist_ok=True)
         if data_loader is None:

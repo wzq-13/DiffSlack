@@ -312,31 +312,31 @@ def get_speed(vehicle):
     vel = vehicle.get_velocity()
     return 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
 
-def generate_path(index, method='APF-hard'):
+def generate_path(index, method='DiffSlack'):
     path = []
-    if method == 'APF-hard':
+    if method == 'DiffSlack':
         path.append(carla.Location(x=float(0), y=float(0), z=0))
-        path_data_file = f'path_data_V2/APF-hard/batch_{index}.npy'
+        path_data_file = f'./path/DiffSlack/batch_{index}.npy'
         path_numpy = np.load(path_data_file, allow_pickle=True)
     elif method == 'DC3':
         path.append(carla.Location(x=float(0), y=float(0), z=0))
-        path_data_file = f'path_data_V2/DC3/batch_{index}.npy'
+        path_data_file = f'./path/DC3/batch_{index}.npy'
         path_numpy = np.load(path_data_file, allow_pickle=True)
     elif method == 'IL-Soft':
         path.append(carla.Location(x=float(0), y=float(0), z=0))
-        path_data_file = f'path_data_V2/IL-Soft/batch_{index}.npy'
+        path_data_file = f'./path/IL-Soft/batch_{index}.npy'
         path_numpy = np.load(path_data_file, allow_pickle=True)
     elif method == 'IL_pure':
         path.append(carla.Location(x=float(0), y=float(0), z=0))
-        path_data_file = f'path_data_V2/IL_pure/batch_{index}.npy'
+        path_data_file = f'./path/IL_pure/batch_{index}.npy'
         path_numpy = np.load(path_data_file, allow_pickle=True)
     elif method == 'DC3-50':
         path.append(carla.Location(x=float(0), y=float(0), z=0))
-        path_data_file = f'path_data_V2/DC3-50/batch_{index}.npy'
+        path_data_file = f'./path/DC3-50/batch_{index}.npy'
         path_numpy = np.load(path_data_file, allow_pickle=True)
     elif method == 'ENFORCE':
         path.append(carla.Location(x=float(0), y=float(0), z=0))
-        path_data_file = f'path_data_V2/ENFORCE/batch_{index}.npy'
+        path_data_file = f'./path/ENFORCE/batch_{index}.npy'
         path_numpy = np.load(path_data_file, allow_pickle=True)
     return path_numpy
 
@@ -889,7 +889,7 @@ def analyze_results():
     
 if __name__ == '__main__':
     RENDER = False
-    alg = 'APF-hard' # 'APF-hard', 'DC3', 'IL-Soft' 'IL_pure' 'DC3-50' 'ENFORCE'
+    alg = 'DiffSlack' # 'DiffSlack', 'DC3', 'IL-Soft' 'IL_pure' 'DC3-50' 'ENFORCE'
     RESULT_DIR = f'res/{alg}'
     os.makedirs(RESULT_DIR, exist_ok=True)
     indexs = range(0, 100)
