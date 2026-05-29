@@ -1,0 +1,33 @@
+seed: 0
+
+# neural network parameters
+lr: 1.0e-3
+weight_decay: 1.0e-4
+lr_decay: 0.8
+lr_decay_step: 100 #3000
+
+batch_size: 512
+
+num_epochs_stage1: 300
+num_epochs_stage2: 100
+begin_epoch: 300
+
+input_dim: 66
+hidden_dim: [128, 256, 512, 512]
+output_dim: 280
+N_dim: 7
+slack_dim: 5
+dropout: 0.0
+eval_step: 5
+save_step: 20
+obj_weight: 1.0
+constraint_weight: 1.0
+guide_weight: 1.0
+obs_constraints_weight: 1000.0
+
+# ENFORCE parameters
+slack_weight: 1.0
+proj_loss_weight: 50.0
+max_depth: 50
+inference_tol: 1.0e-3
+training_tol: 1.0e-3

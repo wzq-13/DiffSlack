@@ -1,0 +1,25 @@
+seed: 42
+
+# neural network parameters
+lr: 1.0e-3
+weight_decay: 1.0e-4
+lr_decay: 0.8
+lr_decay_step: 100 #3000
+batch_size: 512
+
+num_epochs: 400
+
+input_dim: 66
+hidden_dim: [128, 256, 512, 512]
+output_dim: 80
+num_layers: 3
+dropout: 0.0
+eval_step: 5
+save_step: 20
+visual_step: 5
+obj_weight: 1.0
+constraint_weight: 1.0
+guide_weight: 1.0
+obs_constraints_weight: 1000.0
+
+use_soft_constraints: true

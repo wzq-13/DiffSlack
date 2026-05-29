@@ -1,0 +1,30 @@
+seed: 42
+
+# neural network parameters
+lr: 1.0e-3
+weight_decay: 1.0e-4
+lr_decay: 0.8
+lr_decay_step: 100
+
+batch_size: 512
+
+num_epochs_stage1: 300
+num_epochs_stage2: 100
+begin_epoch: 0
+
+input_dim: 66
+hidden_dim: [128, 256, 512, 512]
+output_dim: 80
+num_layers: 3
+dropout: 0.0
+eval_step: 5
+save_step: 20
+obj_weight: 1.0
+constraint_weight: 1.0
+guide_weight: 1.0
+obs_constraints_weight: 1000.0
+
+# DC3 parameters
+dc3_lr: 1.0e-2
+dc3_train_steps: 10
+dc3_test_steps: 50
