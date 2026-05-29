@@ -2,7 +2,7 @@ import os
 import yaml
 import torch
 import time
-from models.APF_Hard_Trainer import APF_Hard_Trainer
+from models.DiffSlack_Trainer import APF_Hard_Trainer
 from DataLoader.dataload import My_Dataset
 from DataLoader.dataload_IL import My_Dataset_IL, openjson
 from torch.utils.data import DataLoader, Dataset, random_split
