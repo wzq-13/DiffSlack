@@ -208,5 +208,7 @@ res/<method>/
 
 This project builds on and benefits from the following open-source projects and tools:
 
-- PythonRobotics
-- CARLA
+- [PythonRobotics](https://github.com/AtsushiSakai/PythonRobotics.git)
+- [CARLA](https://github.com/carla-simulator/carla.git)
+- [ENFORCE](https://github.com/process-intelligence-research/ENFORCE.git)
+- [DC3](https://github.com/locuslab/DC3.git)
