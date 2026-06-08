@@ -100,13 +100,11 @@ class DC3Correction(nn.Module):
                 Y_var = Y_new.detach().requires_grad_(True)
 
                 g = constraint_func(X_batch, Y_var)   
-                # 【优化细节】：用 relu 替代 clamp(min=0)，数学完全等价但底层内核更快
                 g_viol = F.relu(g)        
                 viol = g_viol.pow(2).sum()
                 
                 grad = torch.autograd.grad(viol, Y_var)[0].detach() 
 
-            # 【坚守底线】：绝不使用 in-place 操作，保持每一轮生成新张量，死守 86% 准确率
             new_step = self.lr * grad + self.momentum * old_step
             Y_new = Y_new - new_step
             old_step = new_step
@@ -118,28 +116,23 @@ class DC3Correction(nn.Module):
         old_step = torch.zeros_like(Y_new)
         actual_steps = 0
 
-        # 外层整体 no_grad，防止产生无用计算图
         with torch.no_grad():
             for i in range(max_steps):
-                # 局部开启梯度计算当前步
                 with torch.enable_grad():
                     Y_var = Y_new.detach().requires_grad_(True)
                     g = constraint_func(X_batch, Y_var)
                     g_viol = F.relu(g)
                     
-                    # 【核心优化】：复用刚刚算出来的 g_viol 检查早停
-                    # 避免了原代码中额外多做一次无梯度的 constraint_func！
                     if i > 0:
                         max_viol = g_viol.max().item()
                         if max_viol < self.eps:
                             break
                     
-                    # 没达到早停条件，顺带把剩下的导数求完
                     viol = g_viol.pow(2).sum()
                     grad = torch.autograd.grad(viol, Y_var)[0].detach()
 
                 new_step = self.lr * grad + self.momentum * old_step
-                Y_new = Y_new - new_step # Test模式因为有最外层no_grad，无需再写 .detach()
+                Y_new = Y_new - new_step
                 old_step = new_step
                 actual_steps = i + 1
 

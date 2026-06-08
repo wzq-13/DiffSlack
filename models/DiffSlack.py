@@ -61,7 +61,6 @@ class NeuralProjection(nn.Module):
         B = self.compute_batch_jacobian(data, y_pred, constraints_fn)
         B = B.view(batch_size, -1, output_dim)
         
-        # W_inv 对角：轨迹点 1/w_traj，松弛变量 1/w_slack
         W_inv_diag = torch.empty(output_dim, device=y_pred.device)
         W_inv_diag[:self.n_traj].fill_(1.0 / self.w_traj)
         W_inv_diag[self.n_traj:].fill_(1.0 / self.w_slack)
@@ -91,7 +90,7 @@ class NeuralProjection(nn.Module):
         #     return y_pred - correction
         
         mask = needs_proj.unsqueeze(-1).to(y_pred.dtype)
-        return y_pred - mask * correction  # 展开 mask 运算，减少一次全量加法
+        return y_pred - mask * correction
     
 class AdaNP(nn.Module):
     def __init__(self, n_outputs: int, n_constraints: int, max_depth: int = 50, tol: float = 1e-3):
@@ -153,20 +152,6 @@ class ENFORCE(nn.Module):
         # 训练状态跟踪
         self.adaptive_training = True
     def forward(self, data: torch.Tensor, constraints_fn: Callable) -> Tuple[torch.Tensor, dict]:
-        """
-        前向传播
-        
-        Args:
-            x: 输入数据
-            constraints_fn: 约束函数
-            y_true: 真实标签（用于训练）
-            mode: 'train' 或 'inference'
-            
-        Returns:
-            y_final: 最终预测
-            info: 训练信息字典
-        """
-        # Backbone Network Prediction
         y_pred = self.backbone(data)
         info = {
             'projection_depth': 0,
@@ -188,7 +173,6 @@ class ENFORCE(nn.Module):
         return y_final, info, y_pred
  
             
-# 提取出纯数学计算部分，进行无分支的全图编译
 @torch.compile(fullgraph=True)
 def _compiled_projection_math(y_pred: torch.Tensor, h: torch.Tensor, 
                               B: torch.Tensor, B_W: torch.Tensor, reg: torch.Tensor) -> torch.Tensor:
@@ -196,7 +180,6 @@ def _compiled_projection_math(y_pred: torch.Tensor, h: torch.Tensor,
     A = torch.addmm(reg, B_W, B.T)
     h_unsqueeze = h.unsqueeze(-1)
     
-    # 纯数学运算，没有任何 CPU 同步
     L = torch.linalg.cholesky(A)
     x = torch.cholesky_solve(h_unsqueeze, L)
     
@@ -237,7 +220,6 @@ class NeuralProjectionTest(nn.Module):
 
     @torch.compiler.disable
     def _get_reg_eye(self, m: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-        # 直接生成 2D 矩阵 (m, m)
         if self._reg_eye is None or self._reg_eye.shape[-1] != m or self._reg_eye.device != device:
             self._reg_eye = torch.eye(m, device=device, dtype=dtype).mul_(1e-6)
         return self._reg_eye
@@ -261,7 +243,6 @@ class NeuralProjectionTest(nn.Module):
         B_W = B * self._get_W_inv_diag(B.device, B.dtype)
         reg = self._get_reg_eye(m, y_pred.device, y_pred.dtype)
 
-        # 调用局部编译的数学算子
         y_new = _compiled_projection_math(y_pred, h, B, B_W, reg)
 
         with torch.no_grad():
@@ -282,7 +263,7 @@ class AdaNPTest(nn.Module):
         data: Dict,
         y_pred: torch.Tensor,
         constraints_fn: Callable,
-    ) -> torch.Tensor:  # 仅返回 best_y
+    ) -> torch.Tensor:
 
         y_current = y_pred
 
@@ -296,20 +277,17 @@ class AdaNPTest(nn.Module):
         for _ in range(self.max_depth):
             with torch.no_grad():
                 residual = constraints_val.max()
-                # 保留早停机制，这里是唯一一次 CUDA 同步
                 if residual.item() < self.tol:
                     # pass    # for ablation
                     break
                 actual_depth += 1
             # torch.compiler.cudagraph_mark_step_begin()
-            # 移除了 needs_proj 判断，因为外层有早停，进到这里就一定需要投影
             y_current, constraints_val = self.projection_layer(data, y_current, constraints_fn)
 
             with torch.no_grad():
                 new_residual = constraints_val.max()
                 if new_residual < min_residual:
                     min_residual = new_residual
-                    # 原地赋值，杜绝循环内分配显存
                     best_y.copy_(y_current)
 
         return best_y, actual_depth

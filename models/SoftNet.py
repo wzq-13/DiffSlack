@@ -21,10 +21,6 @@ from torch.utils.tensorboard import SummaryWriter
 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 # DEVICE = torch.device("cpu")
 def path_clean(path, target):
-    """
-    清理路径，去除重复点和距离过近的点
-    """
-    # # 找到离终点最近的点
     dists_to_target = np.linalg.norm(path[:, :2] - target, axis=1)
     min_index = np.argmin(dists_to_target)
     path = path[:min_index + 1]
@@ -40,7 +36,6 @@ def path_clean(path, target):
                 min_dist = dist
                 min_index = j
         if min_index != i-1:
-            # 删掉从 min_index+1 到 i-1 的点
             path = np.delete(path, np.s_[min_index+1:i], axis=0)
             i = min_index + 1
         else:
@@ -53,14 +48,14 @@ def path_clean(path, target):
         next_index = i
         for j in range(i, len(path)-1):
             dist = np.linalg.norm(path[j, :2] - cleaned_path[-1][:2])
-            if dist >= 0.8:  # 保留距离大于阈值的点
+            if dist >= 0.8:
                 next_p = path[j]
                 next_index = j
                 break
         if next_p is not None:
             cleaned_path.append(next_p)
-        i = next_index if next_index > i else i + 1  # 防止死循环
-    cleaned_path.append(path[-1])  # 确保终点被添加
+        i = next_index if next_index > i else i + 1
+    cleaned_path.append(path[-1])
     return np.array(cleaned_path)
 class PINN_Trainer:
     def __init__(self, config, train_loader, val_loader, test_loader=None, save_dir=None, load_dir=None, log_dir=None, model='MLP'):

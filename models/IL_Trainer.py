@@ -300,20 +300,16 @@ class IL_Trainer:
         os.makedirs(path_data_dir, exist_ok=True)
         if data_loader is None:
             data_loader = self.test_loader
-        # 3. 正式测试循环
         with torch.no_grad():
             for batch_idx, X_batch in enumerate(data_loader):
-                # 数据搬运
                 save_path = os.path.join(path_data_dir, f'batch_{batch_idx}.npy')
                 if os.path.exists(save_path):
                     continue
                 for key in X_batch:
                     X_batch[key] = X_batch[key].to(DEVICE, non_blocking=True)
                 
-                # 模型推理
                 Y_pred = self.model(X_batch)
                 Y_final = Y_pred.view(Y_pred.size(0), -1, 2)  # (B, N, 2)
                 Y_final_numpy = Y_final[0].cpu().numpy()
-                # 保存Y_final_numpy
                 np.save(save_path, Y_final_numpy)
                 print(f"Saved Y_final_numpy for batch {batch_idx}.")

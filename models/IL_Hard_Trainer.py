@@ -319,7 +319,6 @@ class IL_Hard_Trainer:
         print(f"Test Minimum Distance to Obstacles: {test_metrics['min_distance']:.4f}")
         print(f"Test Distance Violation: {test_metrics['dist_violation']:.4f}")
         
-        # 保存测试结果到文件
         results_file = os.path.join(self.log_dir, 'test_results_same.txt') if self.log_dir is not None else 'test_results.txt'
         with open(results_file, 'w') as f:
             f.write("=== Test Results ===\n")
@@ -417,21 +416,17 @@ class IL_Hard_Trainer:
         if not os.path.exists(path_data_dir):
             os.makedirs(path_data_dir)
         
-        # 3. 正式测试循环
         with torch.no_grad():
             for batch_idx, X_batch in enumerate(data_loader):
-                # 数据搬运
                 save_path = os.path.join(path_data_dir, f'batch_{batch_idx}.npy')
                 # if os.path.exists(save_path):
                 #     continue
                 for key in X_batch:
                     X_batch[key] = X_batch[key].to(DEVICE, non_blocking=True)
                 
-                # 模型推理
                 Y_final = self.model(X_batch)
                 Y_final = Y_final.view(Y_final.size(0), -1, 2)  # (B, N, 2)
                 Y_final_numpy = Y_final[0].cpu().numpy()
-                # 保存Y_final_numpy
                 np.save(save_path, Y_final_numpy)
                 print(f"Saved Y_final_numpy for batch {batch_idx}.")
         self.adanp.train()

@@ -33,14 +33,12 @@ VRY = [W / 2, -W / 2, -W / 2, W / 2, W / 2]
 
 
 def check_car_collision(x_list, y_list, yaw_list, ox, oy, kd_tree, margin=0):
-    # 调整预筛选半径：如果车变大了，搜索范围也要相应扩大，防止漏检
     search_radius = BUBBLE_R + margin 
     
     for i_x, i_y, i_yaw in zip(x_list, y_list, yaw_list):
         cx = i_x + BUBBLE_DIST * cos(i_yaw)
         cy = i_y + BUBBLE_DIST * sin(i_yaw)
 
-        # 使用扩大的半径进行粗筛
         ids = kd_tree.query_ball_point([cx, cy], search_radius)
 
         if not ids:
@@ -63,12 +61,10 @@ def rectangle_check(x, y, yaw, ox, oy, margin):
         converted_xy = np.stack([tx, ty]).T @ rot
         rx, ry = converted_xy[0], converted_xy[1]
 
-        # 核心修改：在边界判断上加上 margin
-        # 前后左右都向外扩张 margin 的距离
-        if not (rx > LF + margin or      # 前边界前移
-                rx < -LB - margin or     # 后边界后移
-                ry > W / 2.0 + margin or # 左边界左移
-                ry < -W / 2.0 - margin): # 右边界右移
+        if not (rx > LF + margin or 
+                rx < -LB - margin or  
+                ry > W / 2.0 + margin or 
+                ry < -W / 2.0 - margin):
             return False  # collision
 
     return True  # no collision

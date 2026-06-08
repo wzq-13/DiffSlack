@@ -22,8 +22,8 @@ DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 def obj_fn(data, y, config):
     distance_map = data['distance_map']  # (batch_size, H, W)
     xy = y.view(y.shape[0], -1, 2)  # (batch_size, N, 2)
-    world_x = xy[:, :, 0]  # (B, N) 所有点的x坐标
-    world_y = xy[:, :, 1]  # (B, N) 所有点的y坐标
+    world_x = xy[:, :, 0]  # (B, N)
+    world_y = xy[:, :, 1]  # (B, N)
     i, j = world_to_grid(world_x, world_y)  # (B, N)
     distances = get_map_distance(distance_map, i, j, config)  # (B, N)
     map_loss = distances.mean()

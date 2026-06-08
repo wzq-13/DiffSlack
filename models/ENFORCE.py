@@ -282,9 +282,6 @@ class ENFORCEAadaNP(nn.Module):
             }
 
         return p_final, actual_depth, info
-# ============================================================
-# 1. ENFORCE test 版的纯数学投影核
-# ============================================================
 
 @torch.compile(fullgraph=True)
 def _compiled_enforce_projection_math(
@@ -356,7 +353,6 @@ class ENFORCEFBWrapper(nn.Module):
     ) -> torch.Tensor:
         p, lam = self.split(y_ext)
 
-        # 原始不等式约束: g(p) <= 0
         g = constraints_fn(data, p)  # (1, Nc)
 
         # ENFORCE FB reformulation uses b = -g >= 0
@@ -378,10 +374,6 @@ class ENFORCEFBWrapper(nn.Module):
         g = constraints_fn(data, p)
         return g.max()
 
-
-# ============================================================
-# 3. Batch size = 1 的 ENFORCE projection layer
-# ============================================================
 
 class ENFORCENeuralProjectionTest(nn.Module):
     """
@@ -551,10 +543,6 @@ class ENFORCENeuralProjectionTest(nn.Module):
         return y_new, phi_new, g_new
 
 
-# ============================================================
-# 4. Batch size = 1 的 ENFORCE AdaNP test 版
-# ============================================================
-
 class ENFORCEAadaNPTest(nn.Module):
     """
     Test-time optimized ENFORCE AdaNP for batch size = 1.
@@ -627,10 +615,8 @@ class ENFORCEAadaNPTest(nn.Module):
 
         for _ in range(self.max_depth):
             with torch.no_grad():
-                # ENFORCE 的迭代标准应该看 FB equality residual
                 residual = phi.abs().max()
 
-                # 这里和你的版本一样，有一次 CUDA 同步用于 early stop
                 if residual.item() < self.tol:
                     break
 

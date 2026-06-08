@@ -43,9 +43,6 @@ SUMMARY_FILE = './Astar_summary6.txt'
 show_animation = False
 from matplotlib.path import Path as MplPath
 def obstacle_blowup_quadrilateral(obstacles, blowup_distance):
-    """
-    对四边形障碍物进行膨胀，并强制保持四边形形状。
-    """
     blown_up_obstacles = []
     for obs in obstacles:
         poly = np.array(obs)
@@ -77,32 +74,21 @@ def obstacle_blowup_quadrilateral(obstacles, blowup_distance):
 
     return blown_up_obstacles # (M, 4, 2)
 def get_obstacle_points_from_polygons(polygons, resolution=0.5):
-    """
-    将多边形列表转换为离散的点集 (ox, oy)
-    polygons: List of list of [x, y] vertices. 
-              Example: [[[x1, y1], [x2, y2], [x3, y3], [x4, y4]], ...]
-    resolution: 采样分辨率，建议小于车辆半径或网格分辨率
-    """
     ox, oy = [], []
     polygons = obstacle_blowup_quadrilateral(polygons, blowup_distance=0.3)
     for poly_points in polygons:
-        # 1. 创建 Matplotlib Path 对象用于判断点是否在多边形内
         path = MplPath(poly_points)
         
-        # 2. 获取多边形的包围盒 (Bounding Box)
         poly_arr = np.array(poly_points)
         min_x, min_y = np.min(poly_arr, axis=0)
         max_x, max_y = np.max(poly_arr, axis=0)
         
-        # 3. 在包围盒内生成网格点
         x_range = np.arange(min_x, max_x + resolution, resolution)
         y_range = np.arange(min_y, max_y + resolution, resolution)
         x_grid, y_grid = np.meshgrid(x_range, y_range)
         
-        # 展平以便批量处理
         points = np.vstack((x_grid.flatten(), y_grid.flatten())).T
         
-        # 4. 筛选出在多边形内部的点
         # radius=0 表示包含边界
         mask = path.contains_points(points, radius=0.001) 
         
@@ -111,8 +97,6 @@ def get_obstacle_points_from_polygons(polygons, resolution=0.5):
         ox.extend(valid_points[:, 0])
         oy.extend(valid_points[:, 1])
 
-        # 5. (可选) 额外强制添加边界点，防止分辨率不够导致“漏风”
-        # 如果车辆很小或者对碰撞要求极高，可以解开下面的注释手动插值边界
         for i in range(len(poly_points)):
             p1 = poly_points[i]
             p2 = poly_points[(i + 1) % len(poly_points)]
@@ -531,9 +515,9 @@ def test_single(index):
             # print("Path length:", path_length)
             if path_length < min_len:
                 min_len = path_length
-                visualize_single_data(data, path_xy, save_path=img_save_dir, i = index)
+                # visualize_single_data(data, path_xy, save_path=img_save_dir, i = index)
             target_theta += np.deg2rad(10.0)
-            continue
+            # continue
         path_x = path.x_list
         path_y = path.y_list
         path_yaw = path.yaw_list
@@ -572,20 +556,8 @@ def test_single(index):
     return
 
 def normalize_path_points(raw_path, num_points=40):
-    """
-    将任意长度的路径 (M, 2) 重采样为固定长度 (N, 2) 的路径。
-    使用线性插值，基于路径的累积距离（弧长）。
-    
-    参数:
-        raw_path (list or np.array): Hybrid A* 输出的原始路径，形状为 (M, 2) 或 (M, 3)
-        num_points (int): 神经网络需要的固定点数，例如 40
-        
-    返回:
-        np.array: 形状为 (num_points, 2) 的重采样路径
-    """
     raw_path = np.array(raw_path)
     
-    # 1. 异常处理：如果路径点太少（比如起点即终点）
     if raw_path is None or len(raw_path) < 2:
         # 直接填充起点，保持形状一致
         if len(raw_path) == 1:
@@ -593,41 +565,29 @@ def normalize_path_points(raw_path, num_points=40):
         else:
             return np.zeros((num_points, 2))
 
-    # 只取 x, y 坐标 (忽略 theta 如果有的话)
     path_xy = raw_path[:, :2]
     
-    # 2. 计算路径上每一步的欧氏距离
     # diffs[i] = point[i+1] - point[i]
     diffs = np.diff(path_xy, axis=0)
     
     # norms[i] = len(diffs[i])
     distances = np.linalg.norm(diffs, axis=1)
     
-    # 3. 计算累积距离 (从 0 开始)
-    # cum_dist 形状与 raw_path 长度一致
     cum_dist = np.insert(np.cumsum(distances), 0, 0)
     
     total_length = cum_dist[-1]
     
-    # 如果路径长度为0（重复点），直接返回重复点
     if total_length == 0:
         return np.tile(path_xy[0], (num_points, 1))
 
-    # 4. 创建插值函数
-    # x(dist) 和 y(dist)
-    # kind='linear' 最稳健，'cubic' 可能会在急转弯处过冲 (overshoot)
     fx = interp1d(cum_dist, path_xy[:, 0], kind='linear')
     fy = interp1d(cum_dist, path_xy[:, 1], kind='linear')
     
-    # 5. 生成目标等距点
-    # 在 0 到 total_length 之间生成 num_points 个均匀分布的距离值
     target_dists = np.linspace(0, total_length, num_points)
     
-    # 6. 计算新的坐标
     new_x = fx(target_dists)
     new_y = fy(target_dists)
     
-    # 组合结果 (num_points, 2)
     normalized_path = np.column_stack((new_x, new_y))
     
     return normalized_path
@@ -679,7 +639,6 @@ def generate_label(index):
             target_theta += np.deg2rad(30.0)
             continue
         else:
-            # 增加batch维度进行可视化
             path_x = path.x_list
             path_y = path.y_list
             path_xy = np.array([[path_x[i], path_y[i]] for i in range(len(path_x))])
@@ -721,7 +680,6 @@ def analyze_results():
                 stats['path_smoothness'].append(data['smoothness'])
                 stats['curvature'].append(data['curvature'])
             else:
-                # 失败的案例通常只统计时间和成功率，不统计路径长度等
                 stats['time_consumption'].append(data['time'])
                 
         except Exception as e:
@@ -750,10 +708,8 @@ def analyze_results():
 
     print(report)
     
-    # 保存最终结果到文件
     with open(SUMMARY_FILE, 'w') as f:
         f.write(report)
-        # 也可以顺便把原始数据的聚合结果存一个json方便后续画图
         # json.dump(stats, f) 
     
     print(f"Summary saved to {SUMMARY_FILE}")

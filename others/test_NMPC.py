@@ -15,76 +15,52 @@ import globalvar
 from utils.utils import path_smoothness, visualize_single_data
 import multiprocessing
 import glob
-from tqdm import tqdm # 导入进度条库
+from tqdm import tqdm 
 import json
 
-# ==========================================
-# 1. 用户自定义配置区域
-# ==========================================
 @dataclass
 class VehicleConfig:
-    """车辆物理参数与限制"""
-    length: float = globalvar.vehicle_geometrics_.vehicle_length      # 车长 (m)
-    width: float = globalvar.vehicle_geometrics_.vehicle_width       # 车宽 (m)
-    wheelbase: float = globalvar.vehicle_geometrics_.vehicle_wheelbase   # 轴距 (m)
+    length: float = globalvar.vehicle_geometrics_.vehicle_length
+    width: float = globalvar.vehicle_geometrics_.vehicle_width  
+    wheelbase: float = globalvar.vehicle_geometrics_.vehicle_wheelbase  
     rear_overhang: float = 1.0
 
-    # 运动学限制
-    max_steer: float = 0.7 # 最大前轮转角 (rad)
-    max_vel: float = 2.4             # 最大速度 (m/s)
-    min_vel: float = 0.0              # 最小速度 (倒车)
-    max_acc: float = 20.0               # 最大加速度
+    max_steer: float = 0.7 
+    max_vel: float = 2.4 
+    min_vel: float = 0.0 
+    max_acc: float = 20.0 
 
     # 避障安全参数
-    safe_margin: float = 0.0 # 额外的安全边距 (m)
+    safe_margin: float = 0.0 
 
 @dataclass
 class NMPCConfig:
-    """优化器参数"""
-    T: int = 40              # 预测步数
-    dt: float = 0.5         # 时间步长
-    w_goal: float = 5.0     # 目标位置权重
-    w_smooth: float = 1.0  # 平滑度权重
-    w_input: float = 1.0     # 控制量权重
-    alpha: float = 10.0       # 障碍物排斥场参数
+    T: int = 40         
+    dt: float = 0.5      
+    w_goal: float = 5.0  
+    w_smooth: float = 1.0 
+    w_input: float = 1.0  
+    alpha: float = 10.0   
 
-# ==========================================
-# 2. 核心算法类
-# ==========================================
 
 class NMPCPlanner:
     def __init__(self, vehicle_cfg, mpc_cfg):
         self.v_cfg = vehicle_cfg
         self.mpc_cfg = mpc_cfg
         
-        # --- 核心修改：计算三个外切圆参数 ---
-        
-        # 1. 计算单个分段的尺寸
-        # 我们把车分为3段，每段长度为 L/3
         segment_len = self.v_cfg.length / 3.0
         
-        # 2. 计算外切圆半径 (覆盖矩形对角线)
-        # 半径 = sqrt( (段长/2)^2 + (车宽/2)^2 )
         half_seg = segment_len / 2.0
         half_width = self.v_cfg.width / 2.0
         self.car_radius = np.sqrt(half_seg**2 + half_width**2)
         
-        # 3. 计算圆心位置 (相对于后轴中心)
-        # 车辆几何中心相对于后轴的距离
         geom_center_to_rear_axle = (self.v_cfg.length / 2.0) - self.v_cfg.rear_overhang
         
-        # 三个圆心相对于【几何中心】的偏移量: [-L/3, 0, +L/3]
-        # 推导:
-        # 第1个圆中心在 1/6 L 处 -> 距离中心 -1/3 L
-        # 第2个圆中心在 3/6 L 处 -> 距离中心 0
-        # 第3个圆中心在 5/6 L 处 -> 距离中心 +1/3 L
         offset_from_geom_center = np.array([-self.v_cfg.length/3.0, 0.0, self.v_cfg.length/3.0])
         
-        # 最终圆心相对于【后轴】的偏移量
         self.circle_offsets = offset_from_geom_center + geom_center_to_rear_axle
 
     def get_half_planes(self, vertices):
-        """鞋带公式自动纠正顺时针/逆时针"""
         area = 0.0
         for i in range(4):
             j = (i + 1) % 4
@@ -114,7 +90,6 @@ class NMPCPlanner:
         U = opti.variable(2, T)
         v, delta = U[0, :], U[1, :]
         
-        # 目标函数
         obj = self.mpc_cfg.w_goal * ((x[-1] - target_pos[0])**2 + (y[-1] - target_pos[1])**2)
         for k in range(T):
             obj += self.mpc_cfg.w_input * (delta[k]**2 + 0.1 * v[k]**2)
@@ -123,12 +98,9 @@ class NMPCPlanner:
                 obj += 10 * (v[k+1] - v[k])**2
         opti.minimize(obj)
         
-        # 约束
         opti.subject_to(X[:, 0] == start_pose)
         for k in range(T):
-            # 运动学
-            beta = ca.atan(ca.tan(delta[k]) / 2.0) # 可选：更精确的重心运动学，或者保持简化的后轴模型
-            # 这里保持后轴模型以匹配 offsets
+            beta = ca.atan(ca.tan(delta[k]) / 2.0)
             x_next = x[k] + v[k] * ca.cos(theta[k]) * dt
             y_next = y[k] + v[k] * ca.sin(theta[k]) * dt
             theta_next = theta[k] + (v[k] / L_wheel) * ca.tan(delta[k]) * dt
@@ -137,7 +109,6 @@ class NMPCPlanner:
         opti.subject_to(opti.bounded(-self.v_cfg.max_steer, delta, self.v_cfg.max_steer))
         opti.subject_to(opti.bounded(self.v_cfg.min_vel, v, self.v_cfg.max_vel))
         
-        # 避障 (3圆外切 LSE)
         obs_eqs = [self.get_half_planes(obs) for obs in obs_polygons]
         total_radius = self.car_radius + self.v_cfg.safe_margin
         alpha = self.mpc_cfg.alpha
@@ -161,7 +132,6 @@ class NMPCPlanner:
                     
                     opti.subject_to(dist_approx + total_radius <= 0)
 
-        # 初值
         opti.set_initial(x, np.linspace(start_pose[0], target_pos[0], T + 1))
         opti.set_initial(y, np.linspace(start_pose[1], target_pos[1], T + 1))
         opti.set_initial(v, 2.0)
@@ -243,9 +213,6 @@ def generate_labels_for_IL(index):
         # print(f"Generated label for index {index}")
 
 def analyze_results():
-    """
-    读取所有保存的结果文件并计算统计数据
-    """
     print("Start analyzing results...")
     json_files = glob.glob(os.path.join(RESULT_DIR, 'res_*.json'))
     
@@ -274,20 +241,17 @@ def analyze_results():
                 stats['path_smoothness'].append(data['smoothness'])
                 stats['curvature'].append(data['curvature'])
             else:
-                # 失败的案例通常只统计时间和成功率，不统计路径长度等
                 stats['time_consumption'].append(data['time'])
                 
         except Exception as e:
             print(f"Error reading {file_path}: {e}")
 
-    # 计算平均值
     success_rate = stats['success_count'] / total_cases if total_cases > 0 else 0
     avg_time = np.mean(stats['time_consumption']) if stats['time_consumption'] else 0
     avg_len = np.mean(stats['path_length']) if stats['path_length'] else 0
     avg_smooth = np.mean(stats['path_smoothness']) if stats['path_smoothness'] else 0
     avg_curv = np.mean(stats['curvature']) if stats['curvature'] else 0
 
-    # 生成报告文本
     report = (
         "================ TEST REPORT ================\n"
         f"Total Cases Processed: {total_cases}\n"
@@ -303,17 +267,12 @@ def analyze_results():
 
     print(report)
     
-    # 保存最终结果到文件
     with open(SUMMARY_FILE, 'w') as f:
         f.write(report)
-        # 也可以顺便把原始数据的聚合结果存一个json方便后续画图
         # json.dump(stats, f) 
     
     print(f"Summary saved to {SUMMARY_FILE}")
 
-# ==========================================
-# 3. 运行示例 (验证顺时针输入)
-# ==========================================
 if __name__ == "__main__":
     now_time = time.strftime("%Y%m%d-%H%M%S")
     # now_time = '20260508-164758'  #NMPC/NMPC_20260508-164758
@@ -329,8 +288,6 @@ if __name__ == "__main__":
     #         pass
     test_single(74)
     # # print("All tasks completed.")
-
-    # # 5. 汇总结果
     # analyze_results()
     # index = random.randint(0, 20000)
     # test_single(index)

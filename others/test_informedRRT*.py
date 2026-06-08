@@ -12,14 +12,14 @@ import math
 import random
 import time
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches  # 用于绘制多边形
+import matplotlib.patches as patches
 import numpy as np
 import globalvar
 from DataLoader.dataload import opendata
 from utils.utils import path_smoothness, visualize_single_data
 import multiprocessing
 import glob
-from tqdm import tqdm # 导入进度条库
+from tqdm import tqdm
 import torch
 try:
     from utils.angle import rot_mat_2d
@@ -37,13 +37,11 @@ def obstacle_blowup_quadrilateral(obstacles, blowup_distance):
     blown_up_obstacles = []
     for obs in obstacles:
         poly = np.array(obs)
-        # 1. 强制逆时针
         signed_area = 0.5 * np.sum(poly[:, 0] * np.roll(poly[:, 1], 1) - 
                                    poly[:, 1] * np.roll(poly[:, 0], 1))
         if signed_area < 0:
             poly = poly[::-1]
 
-        # 2. 计算法向量并外推
         edges = np.roll(poly, -1, axis=0) - poly
         edge_lengths = np.linalg.norm(edges, axis=1, keepdims=True)
         edge_lengths[edge_lengths < 1e-6] = 1e-6 
@@ -76,7 +74,6 @@ class InformedRRTStar:
         self.expand_dis = expand_dis
         self.goal_sample_rate = goal_sample_rate
         self.max_iter = max_iter
-        # obstacle_list 结构变更为: [[(x1, y1), (x2, y2), ...], [obs2_points], ...]
         self.obstacle_list = obstacle_list
         self.node_list = None
 
@@ -110,7 +107,6 @@ class InformedRRTStar:
                                rnd[0] - nearest_node.x)
             new_node = self.get_new_node(theta, n_ind, nearest_node)
             
-            # 碰撞检测逻辑修改
             no_collision = self.check_line_collision(nearest_node, new_node)
 
             if no_collision:
@@ -129,7 +125,7 @@ class InformedRRTStar:
                         if temp_path_len < c_best:
                             path = temp_path
                             c_best = temp_path_len
-            if animation and i % 5 == 0: # 减少绘图频率以提高速度
+            if animation and i % 5 == 0:
                 self.draw_graph(x_center=x_center, c_best=c_best, c_min=c_min,
                                 e_theta=e_theta, rnd=rnd)
 
@@ -144,7 +140,6 @@ class InformedRRTStar:
             dx = new_node.x - self.node_list[i].x
             dy = new_node.y - self.node_list[i].y
             d = math.hypot(dx, dy)
-            # 使用新的碰撞检测
             if self.check_line_collision(self.node_list[i], new_node):
                 d_list.append(self.node_list[i].cost + d)
             else:
@@ -247,7 +242,6 @@ class InformedRRTStar:
                     near_node.parent = n_node - 1
                     near_node.cost = s_cost
 
-    # ================= 核心修改：多边形碰撞检测 =================
 
     def check_line_collision(self, node1, node2):
         """
@@ -257,16 +251,13 @@ class InformedRRTStar:
         p2 = np.array([node2.x, node2.y])
 
         for obstacle in self.obstacle_list:
-            # 1. 检查线段两端点是否在多边形内
             if self.is_inside_polygon(p2, obstacle):
                 return False # Collision
             
-            # 2. 检查线段是否与多边形的任意边相交
-            # 遍历多边形所有边
             n_vertices = len(obstacle)
             for i in range(n_vertices):
                 v1 = np.array(obstacle[i])
-                v2 = np.array(obstacle[(i + 1) % n_vertices]) # 闭合多边形
+                v2 = np.array(obstacle[(i + 1) % n_vertices])
                 
                 if self.is_intersect(p1, p2, v1, v2):
                     return False # Collision
@@ -274,7 +265,6 @@ class InformedRRTStar:
         return True # No Collision
 
     def check_collision(self, near_node, theta, d):
-        # 兼容旧接口，虽然 logic 已经主要在 check_line_collision 里了
         tmp_node = copy.deepcopy(near_node)
         end_x = tmp_node.x + math.cos(theta) * d
         end_y = tmp_node.y + math.sin(theta) * d
@@ -283,9 +273,6 @@ class InformedRRTStar:
 
     @staticmethod
     def is_inside_polygon(point, polygon):
-        """
-        射线法判断点是否在多边形内部
-        """
         x, y = point
         n = len(polygon)
         inside = False
@@ -304,14 +291,9 @@ class InformedRRTStar:
 
     @staticmethod
     def is_intersect(p1, p2, p3, p4):
-        """
-        判断线段 p1p2 和 p3p4 是否相交 (利用向量叉乘)
-        """
         def ccw(A, B, C):
-            # 检查 A, B, C 三点的方向
             return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
 
-        # 如果 p1p2 跨过 p3p4 且 p3p4 跨过 p1p2，则相交
         return (ccw(p1, p3, p4) != ccw(p2, p3, p4)) and (ccw(p1, p2, p3) != ccw(p1, p2, p4))
 
     # ========================================================
@@ -342,10 +324,8 @@ class InformedRRTStar:
                     plt.plot([node.x, self.node_list[node.parent].x],
                              [node.y, self.node_list[node.parent].y], "-g")
         
-        # 绘制多边形障碍物
         ax = plt.gca()
         for ob in self.obstacle_list:
-            # 创建多边形 Patch
             poly = patches.Polygon(ob, closed=True, facecolor='black')
             ax.add_patch(poly)
 
@@ -385,7 +365,6 @@ SAVE_DIR = '/mnt/sim/carla/carla-ue4-0.9.16/PythonAPI/examples/path_data/RRT'
 def linear_interpolation(path, resolution=0.1):
     """
     path: [[x1, y1], [x2, y2], ...]
-    resolution: 两点之间的期望距离
     """
     path = np.array(path)
     new_path = []
@@ -394,24 +373,20 @@ def linear_interpolation(path, resolution=0.1):
         end_point = path[i+1]
         dist = np.linalg.norm(end_point - start_point)
         
-        # 计算需要插多少个点
         num_points = int(dist / resolution)+1
         if num_points < 1:
             num_points = 1
             
-        # 生成线性点
         for j in range(num_points):
             alpha = j / num_points
             interpolated_point = start_point * (1 - alpha) + end_point * alpha
             new_path.append(interpolated_point)
             
-    new_path.append(path[-1]) # 加上终点
+    new_path.append(path[-1]) 
     return np.array(new_path)
 
 def test_single(index):
     test_metrics = {'index': index, 'time': 0.0, 'length':0.0, 'smoothness':0.0, 'curvature':0.0, 'success': False}
-    # 定义障碍物: 每个障碍物是一组 (x, y) 顶点的列表
-    # 这里定义了几个不规则四边形和多边形
     data_file = f'/home/qian/dataset_V7/{index}.npz'
     data = opendata(data_file)
     obstacles = data['obstacles_vertices']
@@ -479,8 +454,6 @@ def test_single(index):
     return None
 
 def save_path_data(index):
-    # 定义障碍物: 每个障碍物是一组 (x, y) 顶点的列表
-    # 这里定义了几个不规则四边形和多边形
     save_dir = SAVE_DIR
     data_file = f'/home/qian/dataset_V7/{index}.npz'
     data = opendata(data_file)
@@ -536,9 +509,6 @@ def save_path_data(index):
     return None
 
 def analyze_results():
-    """
-    读取所有保存的结果文件并计算统计数据
-    """
     print("Start analyzing results...")
     json_files = glob.glob(os.path.join(RESULT_DIR, 'res_*.json'))
     
@@ -567,20 +537,17 @@ def analyze_results():
                 stats['path_smoothness'].append(data['smoothness'])
                 stats['curvature'].append(data['curvature'])
             else:
-                # 失败的案例通常只统计时间和成功率，不统计路径长度等
                 stats['time_consumption'].append(data['time'])
                 
         except Exception as e:
             print(f"Error reading {file_path}: {e}")
 
-    # 计算平均值
     success_rate = stats['success_count'] / total_cases if total_cases > 0 else 0
     avg_time = np.mean(stats['time_consumption']) if stats['time_consumption'] else 0
     avg_len = np.mean(stats['path_length']) if stats['path_length'] else 0
     avg_smooth = np.mean(stats['path_smoothness']) if stats['path_smoothness'] else 0
     avg_curv = np.mean(stats['curvature']) if stats['curvature'] else 0
 
-    # 生成报告文本
     report = (
         "================ TEST REPORT ================\n"
         f"Total Cases Processed: {total_cases}\n"
@@ -596,10 +563,8 @@ def analyze_results():
 
     print(report)
     
-    # 保存最终结果到文件
     with open(SUMMARY_FILE, 'w') as f:
         f.write(report)
-        # 也可以顺便把原始数据的聚合结果存一个json方便后续画图
         # json.dump(stats, f) 
     
     print(f"Summary saved to {SUMMARY_FILE}")
@@ -619,47 +584,13 @@ if __name__ == '__main__':
     # indices = range(0, 10000)
     # with multiprocessing.Pool(processes=30) as pool:
     #     pool.map(save_path_data, indices)
-    # # 4. 并行执行
-    # # 注意：Pool.map 会阻塞直到所有任务完成
     # print(f"Starting multiprocessing pool with {25} processes...")
     # with multiprocessing.Pool(processes=25) as pool:
-    #     # 使用 map，但这里不再接收返回值，因为我们在函数内写文件了
     #     results_iterator = pool.imap_unordered(test_single, indices)
         
-    #     # 这里的循环会随着任务完成一个个推进进度条
     #     for _ in tqdm(results_iterator, total=len(indices)):
     #         pass
     
     # print("All tasks completed.")
 
-    # # 5. 汇总结果
     # analyze_results()
-    
-    
-    # result = {
-    #     'time_consumption': [],
-    #     'path_length': [],
-    #     'path_smoothness': [],
-    #     'curvature': [],
-    #     'success': 0
-    # }
-    # cpu_num = multiprocessing.cpu_count()
-    # with multiprocessing.Pool(processes=25) as pool:
-    #     results = pool.map(test_single, index)
-    # success_count = len(index)
-    # for res in results:
-    #     if not res['length']:
-    #         success_count -= 1
-    #         continue
-    #     result['time_consumption'].append(res['time'])
-    #     result['path_length'].append(res['length'])
-    #     result['path_smoothness'].append(res['smoothness'])
-    #     result['curvature'].append(res['curvature'])
-    #     if res['success']:
-    #         result['success'] += 1
-    # print('Hybrid A* planning success rate:', success_count/len(index))
-    # print('Average time consumption:', np.mean(result['time_consumption']))
-    # print('Average path length:', np.mean(result['path_length']))
-    # print('Average path smoothness:', np.mean(result['path_smoothness']))
-    # print('Average min radius:', np.mean(result['curvature']))
-    # print('Total successful cases:', result['success'])
