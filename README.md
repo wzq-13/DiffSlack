@@ -46,21 +46,10 @@ pip install -r requirements.txt
 
 Using a dedicated virtual environment or conda environment is recommended.
 
-## 1. Generate Data
+## 1. Donwload Data
 
-First generate planning environments:
+You can download data from (https://drive.google.com/drive/folders/1g11mi35CIDDpZGkraySVMox_5b98mBt0?usp=drive_link)
 
-```bash
-python data_generator.py
-```
-
-By default, generated samples are saved under:
-
-```text
-./dataset/
-```
-
-Each `.npz` sample contains the planning scene information used by the learning methods, including obstacle geometry, target position, and map-related features. The number of generated samples and multiprocessing behavior can be adjusted near the bottom of `data_generator.py`.
 
 ## 2. Generate NMPC Labels
 
