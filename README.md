@@ -189,9 +189,8 @@ res/<method>/
 
 ## Notes
 
-- Some paths in the current scripts are absolute paths from the original experiment environment. Update them before running on a new machine.
 - Checkpoints are organized under `save_dir/`; you can set `load_dir` in each entry script to evaluate a trained model.
-- `DiifSlack.py` is the current DiffSlack entry filename in the repository.
+- `DiifSlack.py` is the current DiffSlack entry filename in the repository. You can easily use this module to solve other problems.
 
 ## Acknowledgements
 
