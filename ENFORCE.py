@@ -10,17 +10,35 @@ import numpy as np
 import random
 import json
 import gc
+import argparse
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--initialization', choices=('zero', 'learned'))
+    parser.add_argument('--load-dir', default='save_dir/enforce/epoch_299.pth')
+    parser.add_argument('--data-dir', default='./dataset/')
+    parser.add_argument('--run-name')
+    parser.add_argument('--test-only', action='store_true')
+    parser.add_argument(
+        '--profile-timing', action='store_true',
+        help='Run a second instrumented projection pass for timing breakdown.',
+    )
+    args = parser.parse_args()
+
     config_path = 'configs/ENFORCE.yaml'
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+    if args.initialization is not None:
+        config['fb_initialization'] = args.initialization
+    config['profile_timing'] = args.profile_timing
         
     np.random.seed(config['seed'])
     random.seed(config['seed'])
     torch.manual_seed(config['seed'])
     torch.cuda.manual_seed_all(config['seed'])
 
-    dataset = My_Dataset(data_dir='./dataset/', length=200000)
+    dataset = My_Dataset(data_dir=args.data_dir, length=200000)
     
     train_size = int(len(dataset) * 0.6)
     val_size = int(len(dataset) * 0.3)
@@ -32,7 +50,7 @@ def main():
     val_dataset = torch.utils.data.Subset(dataset, range(test_size, test_size + val_size))
     train_dataset = torch.utils.data.Subset(dataset, range(len(dataset) - train_size, len(dataset)))
 
-    base_name = 'enforce_noStage1'
+    base_name = args.run_name or f"ENFORCE_{config['fb_initialization']}"
     
     # id = time.strftime("%Y%m%d-%H%M%S")
     # id = '20260526-103750'
@@ -57,11 +75,13 @@ def main():
                         val_dataset=val_dataset,
                         test_dataset=test_dataset,
                         save_dir=save_dir,
-                        load_dir='save_dir/enforce_noStage1/enforce_noStage1_0/epoch_309.pth',
+                        load_dir=args.load_dir,
                         log_dir=log_dir,
                     )
-    # trainer.train(begin_epoch=config['begin_epoch'])
-    trainer.test(test_hard=True)
+    if args.test_only:
+        trainer.test(test_hard=True)
+    else:
+        trainer.train(begin_epoch=config['begin_epoch'])
     # trainer.save_path_data('./carla/paths/ENFORCE')
     # trainer.test_visualization(os.path.join(log_dir, 'test_visualization'))
 

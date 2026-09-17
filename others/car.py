@@ -46,7 +46,7 @@ def check_car_collision(x_list, y_list, yaw_list, ox, oy, kd_tree, margin=0):
 
         if not rectangle_check(i_x, i_y, i_yaw,
                                [ox[i] for i in ids], [oy[i] for i in ids], 
-                               margin=margin): # 传入 margin
+                               margin=margin): # Pass margin through
             return False  # collision
 
     return True  # no collision

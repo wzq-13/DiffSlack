@@ -216,7 +216,7 @@ class IL_Hard_Trainer:
                 self.test_visualization(save_path=self.log_dir)
             
             if (epoch + 1) % 10 == 0:
-                time.sleep(20) # 每10个epoch休息60秒，缓解GPU压力
+                time.sleep(20) # Pause every 10 epochs to reduce GPU load
         
         self.test_visualization(save_path=self.log_dir)
         self.test(test_hard=True)

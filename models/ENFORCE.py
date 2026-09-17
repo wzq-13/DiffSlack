@@ -1,7 +1,18 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import time
 from torch.func import vmap, jacrev
 from typing import Callable, Dict, Optional, Tuple
+
+FB_INITIALIZATION_MODES = ("zero", "learned")
+
+
+def validate_fb_initialization(mode: str) -> str:
+    if mode not in FB_INITIALIZATION_MODES:
+        choices = ", ".join(FB_INITIALIZATION_MODES)
+        raise ValueError(f"Unknown FB initialization '{mode}'; choose from {choices}")
+    return mode
 
 class ENFORCEProjection(nn.Module):
     """
@@ -30,13 +41,16 @@ class ENFORCEProjection(nn.Module):
         self.damping = damping
         self.eps_fb = eps_fb
 
-    def initialize_extended_output(self, p_pred: torch.Tensor) -> torch.Tensor:
-        lam0 = torch.zeros(
-            p_pred.shape[0],
-            self.n_constraints,
-            device=p_pred.device,
-            dtype=p_pred.dtype,
-        )
+    def initialize_extended_output(
+        self, p_pred: torch.Tensor, lam0: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if lam0 is None:
+            lam0 = p_pred.new_zeros(p_pred.shape[0], self.n_constraints)
+        if lam0.shape != (p_pred.shape[0], self.n_constraints):
+            raise ValueError(
+                f"Expected lambda initialization shape "
+                f"{(p_pred.shape[0], self.n_constraints)}, got {tuple(lam0.shape)}"
+            )
         return torch.cat([p_pred, lam0], dim=-1)
 
     def split(self, y_ext: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -188,12 +202,14 @@ class ENFORCEAadaNP(nn.Module):
         w_lambda: float = 1.0,
         damping: float = 1e-4,
         eps_fb: float = 1e-12,
+        initialization_mode: str = "zero",
     ):
         super().__init__()
         self.n_out = n_out
         self.n_constraints = n_constraints
         self.max_depth = max_depth
         self.tol = tol
+        self.initialization_mode = validate_fb_initialization(initialization_mode)
 
         self.projection_layer = ENFORCEProjection(
             n_out=n_out,
@@ -203,6 +219,18 @@ class ENFORCEAadaNP(nn.Module):
             damping=damping,
             eps_fb=eps_fb,
         )
+        self.lambda_initializer = None
+        if self.initialization_mode == "learned":
+            self.lambda_initializer = nn.Linear(n_out, n_constraints)
+            nn.init.zeros_(self.lambda_initializer.weight)
+            nn.init.constant_(self.lambda_initializer.bias, -6.906754778648554)
+
+    def initialize_extended_output(self, p_pred: torch.Tensor) -> torch.Tensor:
+        """Initialize FB multipliers while leaving the ENFORCE path unchanged."""
+        lam0 = None
+        if self.lambda_initializer is not None:
+            lam0 = F.softplus(self.lambda_initializer(p_pred))
+        return self.projection_layer.initialize_extended_output(p_pred, lam0)
 
     def forward(
         self,
@@ -211,7 +239,43 @@ class ENFORCEAadaNP(nn.Module):
         constraints_fn: Callable,
     ) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
 
-        y_current = self.projection_layer.initialize_extended_output(p_pred)
+        y_initial = self.initialize_extended_output(p_pred)
+
+        best_y, actual_depth, best_depth, best_residual, projection_applied = (
+            self._iterations(data, y_initial, constraints_fn)
+        )
+
+        p_final = best_y[:, :self.n_out]
+        # Keep the initializer output connected to its prediction head.  The
+        # selected projected multiplier is used as a detached supervision
+        # target during training.
+        lambda_initial = y_initial[:, self.n_out:]
+        lambda_best = best_y[:, self.n_out:]
+
+        with torch.no_grad():
+            g_final = constraints_fn(data, p_final)
+            max_ineq_violation = g_final.max(dim=-1).values
+
+            info = {
+                "fb_residual": best_residual,
+                "max_ineq_violation": max_ineq_violation,
+                "best_depth": best_depth,
+                "actual_depth": actual_depth,
+                "projection_applied": projection_applied,
+                "projection_displacement": torch.mean(
+                    (p_final - p_pred) ** 2,
+                    dim=-1,
+                ),
+            }
+
+        info["lambda_initial"] = lambda_initial
+        info["lambda_best"] = lambda_best
+
+        return p_final, actual_depth, info
+
+    def _iterations(self, data, y_initial, constraints_fn):
+        y_current = y_initial
+        p_pred = y_initial[:, :self.n_out]
 
         best_y = y_current.clone()
         actual_depth = torch.zeros(
@@ -220,6 +284,9 @@ class ENFORCEAadaNP(nn.Module):
             device=p_pred.device,
         )
         best_depth = torch.zeros_like(actual_depth)
+        projection_applied = torch.zeros(
+            p_pred.shape[0], dtype=torch.bool, device=p_pred.device
+        )
 
         with torch.no_grad():
             phi = self.projection_layer.fb_residual(
@@ -256,32 +323,13 @@ class ENFORCEAadaNP(nn.Module):
                     best_residual,
                 )
 
+                best_depth[better_mask] = i + 1
+                projection_applied |= better_mask
                 best_y = torch.where(
-                    better_mask.unsqueeze(-1),
-                    y_current,
-                    best_y,
+                    better_mask.unsqueeze(-1), y_current, best_y,
                 )
 
-                best_depth[better_mask] = i + 1
-
-        p_final = best_y[:, :self.n_out]
-
-        with torch.no_grad():
-            g_final = constraints_fn(data, p_final)
-            max_ineq_violation = g_final.max(dim=-1).values
-
-            info = {
-                "fb_residual": best_residual,
-                "max_ineq_violation": max_ineq_violation,
-                "best_depth": best_depth,
-                "actual_depth": actual_depth,
-                "projection_displacement": torch.mean(
-                    (p_final - p_pred) ** 2,
-                    dim=-1,
-                ),
-            }
-
-        return p_final, actual_depth, info
+        return best_y, actual_depth, best_depth, best_residual, projection_applied
 
 @torch.compile(fullgraph=True)
 def _compiled_enforce_projection_math(
@@ -420,17 +468,22 @@ class ENFORCENeuralProjectionTest(nn.Module):
         self._W_inv_diag = None
         self._reg_eye = None
 
-    def initialize_extended_output(self, p_pred: torch.Tensor) -> torch.Tensor:
+    def initialize_extended_output(
+        self, p_pred: torch.Tensor,
+        initial_lambda: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         ENFORCE-style initialization:
         backbone predicts p only, and lambda is initialized to zero.
         """
-        lam0 = torch.zeros(
-            p_pred.shape[0],
-            self.n_constraints,
-            device=p_pred.device,
-            dtype=p_pred.dtype,
-        )
+        lam0 = initial_lambda
+        if lam0 is None:
+            lam0 = p_pred.new_zeros(p_pred.shape[0], self.n_constraints)
+        if lam0.shape != (p_pred.shape[0], self.n_constraints):
+            raise ValueError(
+                f"Expected lambda initialization shape "
+                f"{(p_pred.shape[0], self.n_constraints)}, got {tuple(lam0.shape)}"
+            )
         return torch.cat([p_pred, lam0], dim=-1)  # (1, n_out + Nc)
 
     def _get_jac_fn(self, constraints_fn: Callable) -> Callable:
@@ -495,6 +548,7 @@ class ENFORCENeuralProjectionTest(nn.Module):
         data: Dict,
         y_ext: torch.Tensor,
         constraints_fn: Callable,
+        profile: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -514,7 +568,13 @@ class ENFORCENeuralProjectionTest(nn.Module):
 
         # Jacobian of FB residual wrt y_ext
         jac_fn = self._get_jac_fn(constraints_fn)
+        if profile and y_ext.is_cuda:
+            torch.cuda.synchronize(y_ext.device)
+        jacobian_start = time.perf_counter()
         J = jac_fn(y_ext, data)  # (Nc, 1, D_ext)
+        if profile and y_ext.is_cuda:
+            torch.cuda.synchronize(y_ext.device)
+        jacobian_time = time.perf_counter() - jacobian_start
         J = J.squeeze(1)         # (Nc, D_ext)
 
         # Weighted Jacobian: J W^{-1}
@@ -527,19 +587,54 @@ class ENFORCENeuralProjectionTest(nn.Module):
             dtype=y_ext.dtype,
         )
 
-        y_new = _compiled_enforce_projection_math(
-            y_ext,
-            phi,
-            J,
-            J_W,
-            reg,
-        )
+        if profile:
+            A = torch.addmm(reg, J_W, J.T)
+            if y_ext.is_cuda:
+                torch.cuda.synchronize(y_ext.device)
+            cholesky_start = time.perf_counter()
+            try:
+                L = torch.linalg.cholesky(A)
+                inv_A = None
+            except RuntimeError:
+                # Match the training projection: one Cholesky attempt followed
+                # by a direct inverse fallback.  The fallback cost remains in
+                # this factorization timing bucket.
+                L = None
+                inv_A = torch.linalg.inv(A)
+            if y_ext.is_cuda:
+                torch.cuda.synchronize(y_ext.device)
+            cholesky_time = time.perf_counter() - cholesky_start
+
+            solve_start = time.perf_counter()
+            if L is not None:
+                alpha = torch.cholesky_solve(phi.unsqueeze(-1), L)
+            else:
+                alpha = torch.mm(inv_A, phi.unsqueeze(-1))
+            correction = torch.mm(J_W.T, alpha).squeeze(-1)
+            y_new = y_ext - correction.unsqueeze(0)
+            if y_ext.is_cuda:
+                torch.cuda.synchronize(y_ext.device)
+            solve_time = time.perf_counter() - solve_start
+        else:
+            y_new = _compiled_enforce_projection_math(
+                y_ext,
+                phi,
+                J,
+                J_W,
+                reg,
+            )
 
         with torch.no_grad():
             phi_new = self.fb(data, y_new, constraints_fn)  # (1, Nc)
             p_new = y_new[:, :self.n_out]
             g_new = constraints_fn(data, p_new)             # (1, Nc)
 
+        if profile:
+            return y_new, phi_new, g_new, {
+                "jacobian_time": jacobian_time,
+                "cholesky_time": cholesky_time,
+                "linear_solve_time": solve_time,
+            }
         return y_new, phi_new, g_new
 
 
@@ -586,6 +681,8 @@ class ENFORCEAadaNPTest(nn.Module):
         data: Dict,
         p_pred: torch.Tensor,
         constraints_fn: Callable,
+        initial_lambda: Optional[torch.Tensor] = None,
+        profile: bool = False,
     ) -> Tuple[torch.Tensor, int, Dict]:
         """
         Args:
@@ -598,7 +695,9 @@ class ENFORCEAadaNPTest(nn.Module):
             info: dict
         """
 
-        y_current = self.projection_layer.initialize_extended_output(p_pred)
+        y_current = self.projection_layer.initialize_extended_output(
+            p_pred, initial_lambda
+        )
 
         with torch.no_grad():
             phi = self.projection_layer.fb(data, y_current, constraints_fn)
@@ -612,6 +711,11 @@ class ENFORCEAadaNPTest(nn.Module):
 
         best_y = y_current.clone()
         actual_depth = 0
+        timing = {
+            "jacobian_time": 0.0,
+            "cholesky_time": 0.0,
+            "linear_solve_time": 0.0,
+        }
 
         for _ in range(self.max_depth):
             with torch.no_grad():
@@ -622,11 +726,15 @@ class ENFORCEAadaNPTest(nn.Module):
 
                 actual_depth += 1
 
-            y_current, phi, g_current = self.projection_layer(
-                data,
-                y_current,
-                constraints_fn,
+            projection_result = self.projection_layer(
+                data, y_current, constraints_fn, profile=profile
             )
+            if profile:
+                y_current, phi, g_current, step_timing = projection_result
+                for key in timing:
+                    timing[key] += step_timing[key]
+            else:
+                y_current, phi, g_current = projection_result
 
             with torch.no_grad():
                 new_residual = phi.abs().max()
@@ -653,6 +761,7 @@ class ENFORCEAadaNPTest(nn.Module):
                 "projection_displacement": torch.mean(
                     (p_best - p_pred) ** 2
                 ).item(),
+                **timing,
             }
 
         return p_best, actual_depth, info

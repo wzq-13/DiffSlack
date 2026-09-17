@@ -7,31 +7,31 @@ import math
 from torch.nn.functional import grid_sample
 def LSE_max(a, dim, rho=10.0):
     """
-    计算张量a在指定维度上的平滑最大值
+    Compute the smooth maximum of tensor a along the specified dimension.
     LSE_max(a) = (1/rho) * log(sum(exp(rho * a)))
     
     Args:
-        a: 输入张量
-        dim: 指定的维度
-        rho: 平滑参数，rho越大，近似越接近max函数
+        a: Input tensor.
+        dim: Dimension along which to reduce.
+        rho: Smoothing parameter; larger values more closely approximate max.
         
     Returns:
-        smooth_max: 平滑最大值张量
+        smooth_max: Tensor containing the smooth maximum values.
     """
     return (1.0 / rho) * torch.logsumexp(rho * a, dim=dim)
 
 def LSE_min(a, dim, rho=10.0):
     """
-    计算张量a在指定维度上的平滑最小值
+    Compute the smooth minimum of tensor a along the specified dimension.
     LSE_min(a) = -(1/rho) * log(sum(exp(-rho * a)))
     
     Args:
-        a: 输入张量
-        dim: 指定的维度
-        rho: 平滑参数，rho越大，近似越接近min函数
+        a: Input tensor.
+        dim: Dimension along which to reduce.
+        rho: Smoothing parameter; larger values more closely approximate min.
         
     Returns:
-        smooth_min: 平滑最小值张量
+        smooth_min: Tensor containing the smooth minimum values.
     """
     return -(1.0 / rho) * torch.logsumexp(-rho * a, dim=dim)
 
@@ -94,8 +94,8 @@ def h(x, y, polygons, rho):
 
 def xy2xy_heading(xy):
     '''
-    输入: xy: (B, N, 2)
-    输出: xy_heading: (B, N+1, 3)  包含起始点 (0,0)
+    Input: xy with shape (B, N, 2).
+    Output: xy_heading with shape (B, N+1, 3), including start point (0,0).
     '''
     if not isinstance(xy, torch.Tensor):
         xy = torch.from_numpy(xy)
@@ -103,19 +103,19 @@ def xy2xy_heading(xy):
     device = xy.device
     B, N, _ = xy.shape
 
-    # 在开头拼接起始点 (0,0)
+    # Prepend the start point (0,0)
     init_point = torch.zeros((B, 1, 2), device=device)
     traj_points = torch.cat([init_point, xy], dim=1)  # (B, N+1, 2)
 
-    # 中心差分：第 0 到 N-1 个点，共 N 个
+    # Central differences for points 0 through N-1
     delta_mid = traj_points[:, 2:, :] - traj_points[:, :-2, :]  # (B, N-1, 2)
     h_mid = torch.atan2(delta_mid[..., 1], delta_mid[..., 0])   # (B, N-1)
 
-    # 末点：后向差分
+    # End point: backward difference
     delta_end = traj_points[:, -1, :] - traj_points[:, -2, :]
     h_end = torch.atan2(delta_end[:, 1], delta_end[:, 0]).unsqueeze(1)  # (B, 1)
 
-    # 起始点 (0,0)：前向差分，即指向第一个预测点
+    # Start point (0,0): forward difference toward the first predicted point
     delta_start = traj_points[:, 1, :] - traj_points[:, 0, :]
     h_start = torch.atan2(delta_start[:, 1], delta_start[:, 0]).unsqueeze(1)  # (B, 1)
 
@@ -126,42 +126,42 @@ def xy2xy_heading(xy):
 
 def get_safe_circle_centers(xy_heading):
     '''
-    输入: xy_heading: (B, N, 3) 包含(x, y, heading)
-    输出: circle_centers: (B, N, 3) -> 展平为 (B, N*3, 2)
+    Input: xy_heading with shape (B, N, 3), containing (x, y, heading).
+    Output: circle_centers with shape (B, N, 3), flattened to (B, N*3, 2).
     '''
     B, N, _ = xy_heading.shape
     delta_l = globalvar.vehicle_geometrics_.vehicle_length / 3.0
     
-    # 提取基础数据 (避免重复切片)
+    # Extract base data to avoid repeated slicing
     x = xy_heading[:, :, 0]
     y = xy_heading[:, :, 1]
     heading = xy_heading[:, :, 2]
     
-    # 预计算偏移量
-    # 注意：这些都是创建新张量，符合 vmap 要求
+    # Precompute offsets
+    # These operations create new tensors, as required by vmap
     offset_x = delta_l * torch.cos(heading)
     offset_y = delta_l * torch.sin(heading)
 
-    # --- 分别计算三个圆心 (全部是 Out-of-place 操作) ---
+    # --- Compute the three circle centers using out-of-place operations ---
     center_mid = xy_heading[:, :, :2] 
     center_front = torch.stack([x + offset_x, y + offset_y], dim=-1)
     center_rear = torch.stack([x - offset_x, y - offset_y], dim=-1)
 
-    # --- 堆叠结果 ---
-    # 在 dim=2 堆叠，形成 (B, N, 3, 2) 的结构
-    # 顺序：[中, 前, 后] (这个顺序不影响碰撞检测，只要是3个就行)
+    # --- Stack the results ---
+    # Stack along dim=2 to obtain shape (B, N, 3, 2)
+    # Order: [middle, front, rear]; ordering does not affect collision detection
     circle_centers = torch.stack([center_mid, center_front, center_rear], dim=2)
 
-    # 展平输出
+    # Flatten the output
     return circle_centers.view(B, N*3, 2)
 
 
 def compute_kappa_menger(xy, dist_threshold=0.2):
     '''
-    Menger 外接圆曲率，全程可微
-    xy: (B, N+1, 2)  包含起始点 (0,0)
-    dist_threshold: 点间距阈值，小于此值时曲率趋近于0
-    return: kappa (B, N)  不包含起始点
+    Fully differentiable Menger circumcircle curvature.
+    xy: Shape (B, N+1, 2), including start point (0,0).
+    dist_threshold: Point-spacing threshold below which curvature approaches zero.
+    return: kappa with shape (B, N), excluding the start point.
     '''
     eps = 1e-6
 
@@ -178,11 +178,11 @@ def compute_kappa_menger(xy, dist_threshold=0.2):
 
     kappa_mid = 2.0 * cross.abs() / (a * b * c + eps)  # (B, N-1)
 
-    # 用三条边中最短边作为"点是否足够远"的判据
+    # Use the shortest-edge proxy to determine whether points are sufficiently separated
     min_dist = (a + b) / 2.0
 
-    # tanh 软掩码：dist << threshold 时趋近于 0，dist >> threshold 时趋近于 1
-    # tanh(x) 在 x=0 时为 0，x=2~3 时已接近 1，所以用 x = dist/threshold * 3
+    # Soft tanh mask: approaches 0 far below the threshold and 1 far above it
+    # tanh(x) is 0 at x=0 and nearly 1 at x=2--3, hence x = dist/threshold * 3
     weight = torch.tanh(min_dist / dist_threshold * 3.0)  # (B, N-1)
 
     kappa_mid = kappa_mid * weight
@@ -196,31 +196,31 @@ def compute_kappa_menger(xy, dist_threshold=0.2):
 def soft_constraints(xy_heading, obs_constraints_weight, obstacles_vertices):
     '''
     xy_heading(N+1)
-    约束1:每一步的增量不能太大
-    约束2:每一步的heading变化不能太大
+    Constraint 1: The displacement at each step must not be too large.
+    Constraint 2: The heading change at each step must not be too large.
     '''
     #d
     distances = torch.norm(xy_heading[:, 1:, :2] - xy_heading[:, :-1, :2], dim=2)  # (B, N)
-    max_distance = 0.9 # 最大增量
+    max_distance = 0.9 # Maximum displacement
     distance_violations = F.relu(distances - max_distance)  # (B, N)
     # Increase the weight of distance violations. For APF supervision signals, the weight of distance violations needs to be somewhat larger.
     distance_violations = (distance_violations ** 2 * 100.0)
     distance_violations = distance_violations.sum(dim=1, keepdim=True)  # (B, 1)
     
     turning_kappa = compute_kappa_menger(xy_heading[:, :, :2])  # (B, N-2)
-    min_turning_radius = globalvar.vehicle_kinematics_.min_turning_radius  # 最小转弯半径
+    min_turning_radius = globalvar.vehicle_kinematics_.min_turning_radius  # Minimum turning radius
     max_turning_kappa = 1.0 / min_turning_radius
     turning_violations = F.relu(turning_kappa - max_turning_kappa)  # (B, N-2)
-    # turning_violations = turning_violations.mean(dim=1, keepdim=True)*2  # (B, 1)
-    turning_violations = LSE_max(turning_violations, dim=1, rho=20)
+    # turning_violations = turning_violations.mean(dim=1, keepdim=True)*50*2  # (B, 1)
+    turning_violations = LSE_max(turning_violations, dim=1, rho=20) * 20
     
     # obs
-    xy_heading = xy_heading[:, 1:, :]  # 去掉起始点 (batch_size, N, 3)
+    xy_heading = xy_heading[:, 1:, :]  # Remove the start point (batch_size, N, 3)
     safe_centers = get_safe_circle_centers(xy_heading)  # (batch_size, N*3, 2)
     point_x = safe_centers[:, :, 0]  # (batch_size, N*3)
     point_y = safe_centers[:, :, 1]  # (batch_size, N*3)
     safety_distances = h(point_x, point_y, obstacles_vertices, rho=20.0)  # (batch_size, N*3)
-    safety_distances = F.relu(safety_distances)  # 只保留正值 (B, N*3)
+    safety_distances = F.relu(safety_distances)  # Retain only positive values (B, N*3)
     # safety_distances = safety_distances.view(safety_distances.shape[0], -1, 3) # (B, N, 3)
     # safety_distances = LSE_max(safety_distances, dim=2)  # (B, N)
     safety_distances = torch.mean(safety_distances, dim=1, keepdim=True) # (B, 1)
@@ -234,11 +234,11 @@ def _create_objective_function(stage = 2):
     def objective_function(data, y):
         y = y.view(y.shape[0], -1, 7)  # (batch_size, N, 2+5)
         xy = y[:, :, :2].detach() if stage == 1 else y[:, :, :2]
-        s = y[:, :, 2:5]  # (batch_size, N, 3) 松弛变量
+        s = y[:, :, 2:5]  # (batch_size, N, 3) slack variables
         s_2 = s ** 2
-        s_h = y[:, :, 5]  # (batch_size, N) 光滑度松弛变量
+        s_h = y[:, :, 5]  # (batch_size, N) smoothness slack variables
         s_h_2 = s_h ** 2
-        s_d = y[:, :, 6]  # (batch_size, N) 距离松弛变量
+        s_d = y[:, :, 6]  # (batch_size, N) distance slack variables
         s_d_2 = s_d ** 2
 
         xy_heading = xy2xy_heading(xy)  # (batch_size, N+1, 3) include (0,0)
@@ -249,11 +249,11 @@ def _create_objective_function(stage = 2):
         residuals_distance = distance_violations + s_d_2  # (B, N)
 
         kappas = compute_kappa_menger(xy_heading[:, :, :2])  # (B, N)
-        kappa_max = 1.0 / globalvar.vehicle_kinematics_.min_turning_radius  # 最大曲率
+        kappa_max = 1.0 / globalvar.vehicle_kinematics_.min_turning_radius  # Maximum curvature
         safety_kappas = kappas - kappa_max  # (B, N-1)
         residuals_kappa = safety_kappas + s_h_2  # (B, N-1)
         
-        xy_heading = xy_heading[:, 1:, :]  # 去掉起始点 (batch_size, N, 3)
+        xy_heading = xy_heading[:, 1:, :]  # Remove the start point (batch_size, N, 3)
         safe_centers = get_safe_circle_centers(xy_heading)  # (batch_size, N*3, 2)
         point_x = safe_centers[:, :, 0]  # (batch_size, N*3)
         point_y = safe_centers[:, :, 1]  # (batch_size, N*3)
@@ -334,7 +334,7 @@ def get_map_distance(distance_map, grid_x, grid_y, config):
     
     x_round = torch.round(grid_x_no_grad).long()
     y_round = torch.round(grid_y_no_grad).long()
-    # 八个方向加自己一共九个点
+    # Eight neighboring directions plus the center point, for nine points total
     x_offsets = torch.tensor([-1, -1, -1, 0, 0, 1, 1, 1, 0], device=grid_x.device).view(1, 1, 9)  # (1, 1, 9)
     y_offsets = torch.tensor([-1, 0, 1, -1, 1, -1, 0, 1, 0], device=grid_y.device).view(1, 1, 9)  # (1, 1, 9)
     x_neighbors = x_round.unsqueeze(2) + x_offsets  # (B, N, 9)
@@ -353,7 +353,7 @@ def get_map_distance(distance_map, grid_x, grid_y, config):
     reformulated_potential = neighbor_potential - min_potential.unsqueeze(2)  # (B, N, 9)
     reformulated_potential = reformulated_potential ** 2
     distance_with_neighbors = torch.sqrt((grid_x.unsqueeze(2) - x_neighbors.float())**2 + (grid_y.unsqueeze(2) - y_neighbors.float())**2)  # (B, N, 9)
-    # repulsive_force 随着距离的增大迅速减小
+    # Make repulsive_force decay rapidly with distance
     repulsive_force = reformulated_potential * torch.exp(-10.0 * distance_with_neighbors)  # (B, N, 9)
     repulsive_force = repulsive_force.sum(dim=2)  # (B, N)
 
@@ -370,17 +370,17 @@ def get_map_distance(distance_map, grid_x, grid_y, config):
     dist_01 = distance_map[torch.arange(B).unsqueeze(1), x_down, y_up]  # (B, N)
     dist_00 = distance_map[torch.arange(B).unsqueeze(1), x_down, y_down]  # (B, N)
     
-    # 将四个点的距离堆叠起来 (B, N, 4)
+    # Stack the distances at the four points (B, N, 4)
     all_dists = torch.stack([dist_00, dist_01, dist_10, dist_11], dim=-1)
     
-    # 找到最小距离的索引 (B, N)
+    # Find the index of the minimum distance (B, N)
     min_indices = torch.argmin(all_dists, dim=-1)
     
-    # 根据最小索引选择对应的坐标
+    # Select the corresponding coordinates using the minimum-distance index
     batch_indices = torch.arange(B).unsqueeze(1).expand(B, N)
     point_indices = torch.arange(N).unsqueeze(0).expand(B, N)
     
-    # 获取最近的网格点坐标
+    # Obtain the nearest grid-point coordinates
     
     min_dist = all_dists[batch_indices, point_indices, min_indices]  # (B, N)
 
@@ -408,14 +408,14 @@ def get_map_distance(distance_map, grid_x, grid_y, config):
     
     wa = grid_x - x_down.float()  # (B, N)
     wb = grid_y - y_down.float()  # (B, N)
-    # 双线性插值
+    # Bilinear interpolation
     distances = (1 - wa) * (1 - wb) * dist_00 + wa * (1 - wb) * dist_10 + \
                 (1 - wa) * wb * dist_01 + wa * wb * dist_11  # (B, N)
-    # 计算grid_x grid_y与min_point的距离
+    # Compute the distance from (grid_x, grid_y) to min_point
     return distances + distances_with_min_point_8 * config['guide_weight']
 
 def world_to_grid(x, y, xmin=globalvar.planning_scale_.xmin, ymin=globalvar.planning_scale_.ymin, resolution=globalvar.planning_scale_.resolution):
-    """将世界坐标 (x,y) 转换为网格索引 (i,j)"""
+    """Convert world coordinates (x, y) to grid indices (i, j)."""
     # i = torch.round((x - xmin) / resolution)
     # j = torch.round((y - ymin) / resolution)
     i = (x - xmin) / resolution
@@ -425,8 +425,8 @@ def world_to_grid(x, y, xmin=globalvar.planning_scale_.xmin, ymin=globalvar.plan
 def obj_fn(data, y, config):
     distance_map = data['distance_map']  # (batch_size, H, W)
     xy = y.view(y.shape[0], -1, 7)[:, :, :2]  # (batch_size, N, 2)
-    world_x = xy[:, :, 0]  # (B, N) 所有点的x坐标
-    world_y = xy[:, :, 1]  # (B, N) 所有点的y坐标
+    world_x = xy[:, :, 0]  # (B, N) x-coordinates of all points
+    world_y = xy[:, :, 1]  # (B, N) y-coordinates of all points
     i, j = world_to_grid(world_x, world_y)  # (B, N)
     distances = get_map_distance(distance_map, i, j, config)  # (B, N)
     map_loss = distances.mean()

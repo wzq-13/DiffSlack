@@ -297,22 +297,22 @@ class PINN_Trainer:
         if not os.path.exists(path_data_dir):
             os.makedirs(path_data_dir)
         
-        # 3. 正式测试循环
+        # 3. Main test loop
         with torch.no_grad():
             for batch_idx, X_batch in enumerate(data_loader):
-                # 数据搬运
+                # Move data to the target device
                 save_path = os.path.join(path_data_dir, f'batch_{batch_idx}.npy')
                 if os.path.exists(save_path):
                     continue
                 for key in X_batch:
                     X_batch[key] = X_batch[key].to(DEVICE, non_blocking=True)
                 
-                # 模型推理
+                # Run model inference
                 Y_final = self.model(X_batch)
                 Y_final = Y_final.view(Y_final.size(0), -1, 7)  # (B, N, 7)
                 Y_final = Y_final[:, :, :2]  # (B, N, 2)
                 Y_final_numpy = Y_final[0].cpu().numpy()
-                # 保存Y_final_numpy
+                # Save Y_final_numpy
                 np.save(save_path, Y_final_numpy)
                 print(f"Saved Y_final_numpy for batch {batch_idx}.")
     

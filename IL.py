@@ -15,19 +15,17 @@ def main():
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     batch_size = config['batch_size']
-    data_dir = './dataset_NMPC-label/'
+    data_dir = './dataset_NMPC/'
     filelist = './IL.json'
     datafilelist = openjson(filelist)['files']
-    # dataset = My_Dataset2(data_dir=data_dir, input_dir=input_dir)
 
     dataset = My_Dataset_IL(data_dir=data_dir, datafilelist=datafilelist)
-    dataset_all = My_Dataset(data_dir='./dataset/', length=5000)
+    dataset_all = My_Dataset(data_dir='./dataset/', length=200000)
     
     train_size = int(len(dataset) * 0.8)
     val_size = int((len(dataset) * 0.2))
-    test_size = 1
-    # train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size,test_size])
-    test_dataset = torch.utils.data.Subset(dataset_all, range(74, 74+test_size))
+    test_size = 2000
+    test_dataset = torch.utils.data.Subset(dataset_all, range(0, 0+test_size))
     
     val_dataset = torch.utils.data.Subset(dataset, range(0, val_size))
     train_dataset = torch.utils.data.Subset(dataset, range(val_size, len(dataset)))
@@ -66,11 +64,11 @@ def main():
                       val_loader=val_loader,
                       test_loader=test_loader,
                       save_dir=save_dir,
-                      load_dir='save_dir/IL_soft/IL_soft_20260508-095641/epoch_399.pth',
+                      load_dir='logs/IL_soft/IL_soft_20260508-095641/epoch_399.pth',
                       log_dir=log_dir,
                     )
-    # trainer.test(test_loader)
-    trainer.test_visualization(os.path.join(log_dir, 'test_visualization'))
+    trainer.test(test_loader)
+    # trainer.test_visualization(os.path.join(log_dir, 'test_visualization'))
     # trainer.train()
     # trainer.save_path_data(''./carla/paths/IL)
     

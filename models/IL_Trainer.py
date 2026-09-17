@@ -226,7 +226,7 @@ class IL_Trainer:
         print(f"Test Distance Violation: {test_metrics['dist_violation']:.4f}")
         print(f"Test Min Distance to Target: {test_metrics['min_distance']:.4f}")
         
-        # 保存测试结果到文件
+        # Save test results to a file
         results_file = os.path.join(self.log_dir, 'test_results.txt') if self.log_dir is not None else 'test_results.txt'
         with open(results_file, 'w') as f:
             f.write("=== Test Results ===\n")

@@ -46,13 +46,13 @@ def obstacle_blowup_quadrilateral(obstacles, blowup_distance):
     blown_up_obstacles = []
     for obs in obstacles:
         poly = np.array(obs)
-        # 1. 强制逆时针
+        # 1. Enforce counterclockwise ordering
         signed_area = 0.5 * np.sum(poly[:, 0] * np.roll(poly[:, 1], 1) - 
                                    poly[:, 1] * np.roll(poly[:, 0], 1))
         if signed_area < 0:
             poly = poly[::-1]
 
-        # 2. 计算法向量并外推
+        # 2. Compute outward normals and offset the polygon
         edges = np.roll(poly, -1, axis=0) - poly
         edge_lengths = np.linalg.norm(edges, axis=1, keepdims=True)
         edge_lengths[edge_lengths < 1e-6] = 1e-6 
@@ -89,7 +89,7 @@ def get_obstacle_points_from_polygons(polygons, resolution=0.5):
         
         points = np.vstack((x_grid.flatten(), y_grid.flatten())).T
         
-        # radius=0 表示包含边界
+        # radius=0 includes the boundary
         mask = path.contains_points(points, radius=0.001) 
         
         valid_points = points[mask]
@@ -507,7 +507,7 @@ def test_single(index):
             target_theta += np.deg2rad(30.0)
             continue
         else:
-            # 增加batch维度进行可视化
+            # Add a batch dimension for visualization
             path_x = path.x_list
             path_y = path.y_list
             path_xy = np.array([[path_x[i], path_y[i]] for i in range(len(path_x))])
@@ -559,7 +559,7 @@ def normalize_path_points(raw_path, num_points=40):
     raw_path = np.array(raw_path)
     
     if raw_path is None or len(raw_path) < 2:
-        # 直接填充起点，保持形状一致
+        # Pad directly with the start point to preserve the shape
         if len(raw_path) == 1:
             return np.tile(raw_path[0, :2], (num_points, 1))
         else:
@@ -650,7 +650,7 @@ def generate_label(index):
 
 def analyze_results():
     """
-    读取所有保存的结果文件并计算统计数据
+    Read all saved result files and compute summary statistics.
     """
     print("Start analyzing results...")
     json_files = glob.glob(os.path.join(RESULT_DIR, 'res_*.json'))
@@ -685,14 +685,14 @@ def analyze_results():
         except Exception as e:
             print(f"Error reading {file_path}: {e}")
 
-    # 计算平均值
+    # Compute averages
     success_rate = stats['success_count'] / total_cases if total_cases > 0 else 0
     avg_time = np.mean(stats['time_consumption']) if stats['time_consumption'] else 0
     avg_len = np.mean(stats['path_length']) if stats['path_length'] else 0
     avg_smooth = np.mean(stats['path_smoothness']) if stats['path_smoothness'] else 0
     avg_curv = np.mean(stats['curvature']) if stats['curvature'] else 0
 
-    # 生成报告文本
+    # Generate report text
     report = (
         "================ TEST REPORT ================\n"
         f"Total Cases Processed: {total_cases}\n"

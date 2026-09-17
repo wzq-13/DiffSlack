@@ -24,8 +24,8 @@ DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 def obj_fn(data, y, config):
     distance_map = data['distance_map']  # (batch_size, H, W)
     xy = y.view(y.shape[0], -1, 2)  # (batch_size, N, 2)
-    world_x = xy[:, :, 0]  # (B, N) 所有点的x坐标
-    world_y = xy[:, :, 1]  # (B, N) 所有点的y坐标
+    world_x = xy[:, :, 0]  # (B, N) x-coordinates of all points
+    world_y = xy[:, :, 1]  # (B, N) y-coordinates of all points
     i, j = world_to_grid(world_x, world_y)  # (B, N)
     distances = get_map_distance(distance_map, i, j, config)  # (B, N)
     map_loss = distances.mean()
@@ -45,7 +45,7 @@ def _create_objective_function():
         residuals_distance = distance_violations
 
         kappas = compute_kappa_menger(xy_heading[:, :, :2])  # (B, N)
-        kappa_max = 1.0 / globalvar.vehicle_kinematics_.min_turning_radius  # 最大曲率
+        kappa_max = 1.0 / globalvar.vehicle_kinematics_.min_turning_radius  # Maximum curvature
         safety_kappas = kappas - kappa_max  # (B, N-1)
         residuals_kappa = safety_kappas
         
@@ -78,8 +78,8 @@ class DC3Correction(nn.Module):
 
     def forward(self, X_batch, Y_pred, constraint_func, training=None):
         """
-        对标 dc3layer(X_batch, Y_pred, constraint_func) 的接口
-        返回: (Y_corrected, steps)
+        Match the interface of dc3layer(X_batch, Y_pred, constraint_func).
+        Returns: (Y_corrected, steps)
         """
         if training is None:
             training = self.training 
@@ -96,7 +96,7 @@ class DC3Correction(nn.Module):
         old_step = torch.zeros_like(Y_pred)
 
         for _ in range(num_steps):
-            with torch.enable_grad(): # 明确作用域
+            with torch.enable_grad(): # Explicit gradient-enabled scope
                 Y_var = Y_new.detach().requires_grad_(True)
 
                 g = constraint_func(X_batch, Y_var)   
@@ -333,7 +333,7 @@ class DC3_Trainer:
                 self.test_visualization(save_path=self.log_dir)
             
             if (epoch + 1) % 10 == 0:
-                time.sleep(20) # 每10个epoch休息60秒，缓解GPU压力
+                time.sleep(20) # Pause every 10 epochs to reduce GPU load
         
         self.test_visualization(save_path=self.log_dir)
         self.test(self.test_loader)
@@ -449,7 +449,7 @@ class DC3_Trainer:
         print(f"Test Distance Violation: {test_metrics['dist_violation']:.4f}")
         
         filename = 'test_results.txt'
-        # 保存测试结果到文件
+        # Save test results to a file
         results_file = os.path.join(self.log_dir, filename) if self.log_dir is not None else filename
         with open(results_file, 'w') as f:
             f.write("=== Test Results ===\n")
@@ -589,21 +589,21 @@ class DC3_Trainer:
         os.makedirs(path_data_dir, exist_ok=True)
         if data_loader is None:
             data_loader = self.test_loader
-        # 3. 正式测试循环
+        # 3. Main test loop
         with torch.no_grad():
             for batch_idx, X_batch in enumerate(data_loader):
-                # 数据搬运
+                # Move data to the target device
                 save_path = os.path.join(path_data_dir, f'batch_{batch_idx}.npy')
                 if os.path.exists(save_path):
                     continue
                 for key in X_batch:
                     X_batch[key] = X_batch[key].to(DEVICE, non_blocking=True)
                 
-                # 模型推理
+                # Run model inference
                 Y_pred = self.model(X_batch)
                 Y_proj = self.dc3layer(X_batch, Y_pred, self.constraint_func_stage)[0]
                 Y_final = Y_proj.view(Y_proj.size(0), -1, 2)  # (B, N, 2)
                 Y_final_numpy = Y_final[0].cpu().numpy()
-                # 保存Y_final_numpy
+                # Save Y_final_numpy
                 np.save(save_path, Y_final_numpy)
                 print(f"Saved Y_final_numpy for batch {batch_idx}.")

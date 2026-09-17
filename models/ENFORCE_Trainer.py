@@ -16,8 +16,13 @@ from models.utils import create_model, path_clean
 from torch.utils.tensorboard import SummaryWriter
 from models.ENFORCE import ENFORCEAadaNP, ENFORCEAadaNPTest
 
-DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-# DEVICE = torch.device("cpu")
+# DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+DEVICE = torch.device("cpu")
+
+
+def _synchronize_device():
+    if DEVICE.type == 'cuda':
+        torch.cuda.synchronize(DEVICE)
 
 def obj_fn(data, y, config):
     distance_map = data['distance_map']  # (batch_size, H, W)
@@ -42,11 +47,18 @@ class ENFORCE_Trainer:
         
         self.save_dir = save_dir
         self.log_dir = log_dir
-        self.adanp = ENFORCEAadaNP(max_depth=self.config['max_depth'], tol=self.config['inference_tol'])
-        self.adanp_test = ENFORCEAadaNPTest(max_depth=self.config['max_depth'], tol=self.config['inference_tol'])
+        self.adanp = ENFORCEAadaNP(
+            max_depth=self.config['max_depth'],
+            tol=self.config['inference_tol'],
+            initialization_mode=self.config.get('fb_initialization', 'zero'),
+        ).to(DEVICE)
+        self.adanp_test = ENFORCEAadaNPTest(
+            max_depth=self.config['max_depth'], tol=self.config['inference_tol']
+        ).to(DEVICE)
         self.training_tol = self.config['training_tol']
         self.constraint_func = create_enforce_inequality_constraints()
         
+        checkpoint = None
         if load_dir is not None:
             checkpoint = torch.load(load_dir, map_location=DEVICE)
             load_config = checkpoint.get('config', None)
@@ -54,23 +66,63 @@ class ENFORCE_Trainer:
             self.config['dropout'] = load_config.get('dropout', self.config['dropout'])
         self.model = create_model(self.config, device=DEVICE)
         learning_rate = self.config['lr']
-        self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=self.config['weight_decay'])
+        optimizer_groups = [{'params': self.model.parameters()}]
+        saved_group_count = (
+            len(checkpoint['optimizer_state_dict']['param_groups'])
+            if checkpoint is not None and 'optimizer_state_dict' in checkpoint else 0
+        )
+        initializer_added_before_load = (
+            self.adanp.lambda_initializer is not None and saved_group_count > 1
+        )
+        if initializer_added_before_load:
+            optimizer_groups.append({
+                'params': self.adanp.lambda_initializer.parameters(),
+            })
+        self.optimizer = optim.Adam(
+            optimizer_groups, lr=learning_rate,
+            weight_decay=self.config['weight_decay'],
+        )
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=self.config['lr_decay_step'], gamma=self.config['lr_decay'])
         
         if self.save_dir is not None:
             print(f'Creating save directory at {self.save_dir}')
             os.makedirs(self.save_dir, exist_ok=True)
         if load_dir is not None:
-            checkpoint = torch.load(load_dir, map_location=DEVICE)
             self.model.load_state_dict(checkpoint['model_state_dict'])
+            if 'adanp_state_dict' in checkpoint:
+                self.adanp.load_state_dict(
+                    checkpoint['adanp_state_dict'], strict=False
+                )
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
             print(f'optimizer lr: {self.optimizer.param_groups[0]["lr"]}')
             print(f'Model loaded from {load_dir}')
+
+        if (self.adanp.lambda_initializer is not None
+                and not initializer_added_before_load):
+            self.optimizer.add_param_group({
+                'params': self.adanp.lambda_initializer.parameters(),
+                'lr': self.optimizer.param_groups[0]['lr'],
+                'weight_decay': self.config['weight_decay'],
+            })
+            self.scheduler.base_lrs.append(learning_rate)
+            self.scheduler._last_lr.append(self.optimizer.param_groups[-1]['lr'])
             
         self.loss_func = nn.MSELoss()
         self.adanp._original_forward = self.adanp.forward
         self.adanp.forward = torch.compile(self.adanp.forward, mode='default')
+
+    def _projection_parameters(self):
+        return list(self.model.parameters()) + list(self.adanp.parameters())
+
+    def _project_test(self, data, p_pred, profile=False):
+        y_initial = self.adanp.initialize_extended_output(p_pred)
+        initial_lambda = y_initial[:, self.adanp.n_out:]
+        return self.adanp_test(
+            data, p_pred, self.constraint_func,
+            initial_lambda=initial_lambda,
+            profile=profile,
+        )
         
     def train_epoch_stage1(self, train_loader: DataLoader, epoch: int):
         """Trains the model for one epoch."""
@@ -113,7 +165,11 @@ class ENFORCE_Trainer:
     
     def train_epoch_stage2(self, train_loader: DataLoader, epoch: int):
         """Trains the model for one epoch."""
-        epoch_metrics = {'total_loss': 0.0, 'loss_map_proj': 0.0, 'loss_soft': 0.0, 'loss_soft_proj': 0.0, 'loss_proj': 0.0}
+        epoch_metrics = {
+            'total_loss': 0.0, 'loss_map_proj': 0.0,
+            'loss_soft': 0.0, 'loss_soft_proj': 0.0,
+            'loss_proj': 0.0, 'loss_lambda_init': 0.0,
+        }
         self.model.train()
         bar = tqdm.tqdm(train_loader, desc=f"Training Epoch {epoch+1}/{self.config['num_epochs_stage2']}")
         for X_batch in bar:
@@ -140,10 +196,20 @@ class ENFORCE_Trainer:
             loss_cons_proj = soft_constraints(xy_heading_proj, self.config['obs_constraints_weight'], X_batch['obstacles_vertices'])
             
             loss_proj = torch.mean((Y_proj.detach() - Y_pred)**2)
+            if self.adanp.lambda_initializer is not None:
+                loss_lambda_init = torch.mean(
+                    (info['lambda_best'].detach() - info['lambda_initial']) ** 2
+                )
+            else:
+                loss_lambda_init = Y_pred.new_zeros(())
             
-            loss = loss_map_proj + loss_end + loss_end_pred*5 + loss_cons + loss_proj * self.config['proj_loss_weight']
+            loss = (
+                loss_map_proj + loss_end + loss_end_pred * 5 + loss_cons
+                + (loss_proj + loss_lambda_init)
+                * self.config['proj_loss_weight']
+            )
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(self._projection_parameters(), max_norm=1.0)
             self.optimizer.step()
             actual_depth = actual_depth.detach().cpu().numpy()
             bar.set_postfix(
@@ -152,6 +218,7 @@ class ENFORCE_Trainer:
                 loss_cons=f"{loss_cons.item():.4f}",
                 loss_cons_proj=f"{loss_cons_proj.item():.4f}",
                 loss_proj=f"{loss_proj.item():.4f}",
+                loss_lambda_init=f"{loss_lambda_init.item():.4f}",
                 actual_depth =f"{actual_depth.mean():.4f}"
             )
             epoch_metrics['total_loss'] += loss.item()
@@ -159,6 +226,7 @@ class ENFORCE_Trainer:
             epoch_metrics['loss_soft'] += loss_cons.item()
             epoch_metrics['loss_soft_proj'] += loss_cons_proj.item()
             epoch_metrics['loss_proj'] += loss_proj.item()
+            epoch_metrics['loss_lambda_init'] += loss_lambda_init.item()
         self.scheduler.step()
         
         num_batches = len(train_loader)
@@ -285,7 +353,25 @@ class ENFORCE_Trainer:
         if data_loader is None:
             data_loader = self.test_loader
 
-        test_metrics = {'average_time': 0.0, 'collision_rate':0.0, 'average_length':0.0, 'smoothness':0.0, 'curvature':0.0, 'min_distance':0.0, 'dist_violation': 0.0, 'actual_depth': 0.0, 'proj_distance': 0.0}
+        test_metrics = {
+            'average_time': 0.0, 'network_time': 0.0,
+            'initialization_time': 0.0, 'projection_time': 0.0,
+            'jacobian_time': 0.0, 'cholesky_time': 0.0,
+            'linear_solve_time': 0.0, 'collision_rate': 0.0,
+            'average_length': 0.0, 'smoothness': 0.0, 'curvature': 0.0,
+            'min_distance': 0.0, 'dist_violation': 0.0,
+            'actual_depth': 0.0, 'proj_distance': 0.0,
+        }
+        profile_timing = self.config.get('profile_timing', False)
+        timing_keys = (
+            'average_time', 'network_time', 'initialization_time',
+            'projection_time',
+        )
+        if profile_timing:
+            timing_keys += (
+                'jacobian_time', 'cholesky_time', 'linear_solve_time',
+            )
+        timing_samples = {key: [] for key in timing_keys}
         self.model.eval()
         total_samples = 0
         # warm up
@@ -295,7 +381,7 @@ class ENFORCE_Trainer:
                 for key in X_batch:
                     X_batch[key] = X_batch[key].to(DEVICE, non_blocking=True)
                 Y_pred = self.model(X_batch)
-                Y_proj, actual_depth, info =  self.adanp_test(X_batch, Y_pred, self.constraint_func)
+                Y_proj, actual_depth, info = self._project_test(X_batch, Y_pred)
                 warm_num -= 1
                 if warm_num <=0:
                     break
@@ -305,17 +391,54 @@ class ENFORCE_Trainer:
             for X_batch in test_bar:
                 for key in X_batch:
                     X_batch[key] = X_batch[key].to(DEVICE, non_blocking=True)
-                # torch.cuda.synchronize()
-                start_time = time.time()
+                _synchronize_device()
+                start_time = time.perf_counter()
+
+                network_start = time.perf_counter()
                 Y_pred = self.model(X_batch)
-                # if test_hard:
-                Y_proj, actual_depth, info = self.adanp_test(X_batch, Y_pred, self.constraint_func)
-                end_time = time.time()
+                _synchronize_device()
+                network_time = time.perf_counter() - network_start
+
+                initialization_start = time.perf_counter()
+                y_initial = self.adanp.initialize_extended_output(Y_pred)
+                initial_lambda = y_initial[:, self.adanp.n_out:]
+                _synchronize_device()
+                initialization_time = time.perf_counter() - initialization_start
+
+                projection_start = time.perf_counter()
+                Y_proj, actual_depth, info = self.adanp_test(
+                    X_batch, Y_pred, self.constraint_func,
+                    initial_lambda=initial_lambda,
+                )
+                _synchronize_device()
+                projection_time = time.perf_counter() - projection_start
+                end_time = time.perf_counter()
+
+                profile_info = None
+                if profile_timing:
+                    _, _, profile_info = self.adanp_test(
+                        X_batch, Y_pred, self.constraint_func,
+                        initial_lambda=initial_lambda, profile=True,
+                    )
                 Y_pred_xy = Y_pred.view(Y_pred.size(0), -1, 2)  # (B, N, 2)
                 Y_proj_xy = Y_proj.view(Y_proj.size(0), -1, 2)  # (B, N, 2)
                 proj_distance = torch.norm(Y_proj_xy - Y_pred_xy, dim=2).mean().item()
                 # torch.cuda.synchronize()
-                test_metrics['average_time'] += (end_time - start_time)
+                sample_timings = {
+                    'average_time': end_time - start_time,
+                    'network_time': network_time,
+                    'initialization_time': initialization_time,
+                    'projection_time': projection_time,
+                }
+                if profile_timing:
+                    sample_timings.update({
+                        'jacobian_time': profile_info['jacobian_time'],
+                        'cholesky_time': profile_info['cholesky_time'],
+                        'linear_solve_time': profile_info['linear_solve_time'],
+                    })
+                for key, value in sample_timings.items():
+                    test_metrics[key] += value
+                    timing_samples[key].append(value)
                 score_metrics = self.compute_score(X_batch, Y_proj)
                 test_metrics['average_length'] += score_metrics['length']
                 test_metrics['collision_rate'] += score_metrics['collision']
@@ -331,7 +454,12 @@ class ENFORCE_Trainer:
         test_metrics['average_length'] /= nocollision_samples
         test_metrics['min_distance'] /= nocollision_samples
         
-        test_metrics['average_time'] /= total_samples
+        for key in timing_keys:
+            test_metrics[key] /= total_samples
+            values = timing_samples[key]
+            test_metrics[f'{key}_std'] = (
+                float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+            )
         test_metrics['collision_rate'] /= total_samples
         test_metrics['smoothness'] /= total_samples
         test_metrics['dist_violation'] /= total_samples
@@ -340,7 +468,14 @@ class ENFORCE_Trainer:
         test_metrics['proj_distance'] /= total_samples
         
         print("=== Test Results ===")
-        print(f"Test Average Time per Batch: {test_metrics['average_time']:.4f} seconds")
+        print(f"End-to-end Time: {test_metrics['average_time'] * 1000:.4f} ± {test_metrics['average_time_std'] * 1000:.4f} ms")
+        print(f"Network Time: {test_metrics['network_time'] * 1000:.4f} ± {test_metrics['network_time_std'] * 1000:.4f} ms")
+        print(f"Initialization Time: {test_metrics['initialization_time'] * 1000:.4f} ± {test_metrics['initialization_time_std'] * 1000:.4f} ms")
+        print(f"Projection Time: {test_metrics['projection_time'] * 1000:.4f} ± {test_metrics['projection_time_std'] * 1000:.4f} ms")
+        if profile_timing:
+            print(f"  Jacobian Construction: {test_metrics['jacobian_time'] * 1000:.4f} ± {test_metrics['jacobian_time_std'] * 1000:.4f} ms")
+            print(f"  Cholesky Decomposition: {test_metrics['cholesky_time'] * 1000:.4f} ± {test_metrics['cholesky_time_std'] * 1000:.4f} ms")
+            print(f"  Linear Solve and Update: {test_metrics['linear_solve_time'] * 1000:.4f} ± {test_metrics['linear_solve_time_std'] * 1000:.4f} ms")
         print(f"Test Average Length: {test_metrics['average_length']:.4f}")
         print(f"Test Collision Rate: {test_metrics['collision_rate']:.4f}")
         print(f"Test Smoothness: {test_metrics['smoothness']:.4f}")
@@ -352,14 +487,21 @@ class ENFORCE_Trainer:
 
         # file_name = result_name or f'ab_test/test_I_noEarlyEnd_{self.config["max_depth"]}.txt'
         file_name = 'test_results_hard.txt' if test_hard else 'test_results_soft.txt'
-        # 保存测试结果到文件
+        # Save test results to a file
         results_file = os.path.join(self.log_dir, file_name) if self.log_dir is not None else file_name
         results_dir = os.path.dirname(results_file)
         if results_dir:
             os.makedirs(results_dir, exist_ok=True)
         with open(results_file, 'w') as f:
             f.write("=== Test Results ===\n")
-            f.write(f"Test Average Time per Batch: {test_metrics['average_time']:.4f} seconds\n")
+            f.write(f"End-to-end Time: {test_metrics['average_time'] * 1000:.4f} ± {test_metrics['average_time_std'] * 1000:.4f} ms\n")
+            f.write(f"Network Time: {test_metrics['network_time'] * 1000:.4f} ± {test_metrics['network_time_std'] * 1000:.4f} ms\n")
+            f.write(f"Initialization Time: {test_metrics['initialization_time'] * 1000:.4f} ± {test_metrics['initialization_time_std'] * 1000:.4f} ms\n")
+            f.write(f"Projection Time: {test_metrics['projection_time'] * 1000:.4f} ± {test_metrics['projection_time_std'] * 1000:.4f} ms\n")
+            if profile_timing:
+                f.write(f"  Jacobian Construction: {test_metrics['jacobian_time'] * 1000:.4f} ± {test_metrics['jacobian_time_std'] * 1000:.4f} ms\n")
+                f.write(f"  Cholesky Decomposition: {test_metrics['cholesky_time'] * 1000:.4f} ± {test_metrics['cholesky_time_std'] * 1000:.4f} ms\n")
+                f.write(f"  Linear Solve and Update: {test_metrics['linear_solve_time'] * 1000:.4f} ± {test_metrics['linear_solve_time_std'] * 1000:.4f} ms\n")
             f.write(f"Test Average Length: {test_metrics['average_length']:.4f}\n")
             f.write(f"Test Collision Rate: {test_metrics['collision_rate']:.4f}\n")
             f.write(f"Test Smoothness: {test_metrics['smoothness']:.4f}\n")
@@ -478,6 +620,7 @@ class ENFORCE_Trainer:
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': self.model.state_dict(),
+                'adanp_state_dict': self.adanp.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
                 'scheduler_state_dict': self.scheduler.state_dict(),
                 'config': self.config
@@ -490,22 +633,22 @@ class ENFORCE_Trainer:
         os.makedirs(path_data_dir, exist_ok=True)
         if data_loader is None:
             data_loader = self.test_loader
-        # 3. 正式测试循环
+        # 3. Main test loop
         with torch.no_grad():
             for batch_idx, X_batch in enumerate(data_loader):
-                # 数据搬运
+                # Move data to the target device
                 save_path = os.path.join(path_data_dir, f'batch_{batch_idx}.npy')
                 if os.path.exists(save_path):
                     continue
                 for key in X_batch:
                     X_batch[key] = X_batch[key].to(DEVICE, non_blocking=True)
                 
-                # 模型推理
+                # Run model inference
                 Y_pred = self.model(X_batch)
                 Y_proj,  actual_depth, info = self.adanp._original_forward(X_batch, Y_pred, self.constraint_func)
                 Y_final = Y_proj.view(Y_proj.size(0), -1, self.config['N_dim'])
                 Y_final = Y_final[:, :, :2]  # (B, N, 2)
                 Y_final_numpy = Y_final[0].cpu().numpy()
-                # 保存Y_final_numpy
+                # Save Y_final_numpy
                 np.save(save_path, Y_final_numpy)
                 print(f"Saved Y_final_numpy for batch {batch_idx}.")

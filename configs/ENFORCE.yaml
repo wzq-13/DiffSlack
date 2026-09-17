@@ -8,9 +8,9 @@ lr_decay_step: 100 #3000
 
 batch_size: 512
 
-num_epochs_stage1: 0
-num_epochs_stage2: 400
-begin_epoch: 0
+num_epochs_stage1: 300
+num_epochs_stage2: 100
+begin_epoch: 300
 
 input_dim: 66
 hidden_dim: [128, 256, 512, 512]
@@ -30,3 +30,5 @@ proj_loss_weight: 50.0
 max_depth: 50
 inference_tol: 1.0e-3
 training_tol: 1.0e-3
+# zero | learned. learned predicts a nonnegative FB multiplier from the path.
+fb_initialization: zero

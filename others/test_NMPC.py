@@ -30,8 +30,8 @@ class VehicleConfig:
     min_vel: float = 0.0 
     max_acc: float = 20.0 
 
-    # 避障安全参数
-    safe_margin: float = 0.0 
+    # Obstacle-avoidance safety parameters
+    safe_margin: float = 0.01
 
 @dataclass
 class NMPCConfig:
@@ -40,7 +40,7 @@ class NMPCConfig:
     w_goal: float = 5.0  
     w_smooth: float = 1.0 
     w_input: float = 1.0  
-    alpha: float = 10.0   
+    alpha: float = 20.0
 
 
 class NMPCPlanner:
@@ -80,7 +80,93 @@ class NMPCPlanner:
             planes.append((A, B, C))
         return planes
 
-    def plan(self, start_pose, target_pos, obs_polygons):
+    def _prepare_path_initialization(self, initial_path, start_pose, target_pos):
+        """Resample an optional xy path and derive a full NMPC initial guess."""
+        path = np.array(initial_path, dtype=float, copy=True)
+        if path.ndim != 2 or path.shape[1] != 2 or len(path) < 2:
+            raise ValueError(
+                "initial_path must be a finite array with shape [num_points, 2] "
+                "and contain at least two points"
+            )
+        if not np.all(np.isfinite(path)):
+            raise ValueError("initial_path must contain only finite values")
+
+        start_xy = np.asarray(start_pose[:2], dtype=float)
+        target_xy = np.asarray(target_pos, dtype=float)
+        if not np.allclose(path[0], start_xy):
+            path = np.vstack((start_xy, path))
+        else:
+            path[0] = start_xy
+        if not np.allclose(path[-1], target_xy):
+            path = np.vstack((path, target_xy))
+        else:
+            path[-1] = target_xy
+
+        # Remove adjacent duplicates before arc-length interpolation.
+        segment_lengths = np.linalg.norm(np.diff(path, axis=0), axis=1)
+        keep = np.r_[True, segment_lengths > 1e-9]
+        path = path[keep]
+        if len(path) < 2:
+            raise ValueError("initial_path has zero total length")
+
+        segment_lengths = np.linalg.norm(np.diff(path, axis=0), axis=1)
+        arc_length = np.r_[0.0, np.cumsum(segment_lengths)]
+        sample_arc_length = np.linspace(
+            0.0,
+            arc_length[-1],
+            self.mpc_cfg.T + 1,
+        )
+        x_initial = np.interp(sample_arc_length, arc_length, path[:, 0])
+        y_initial = np.interp(sample_arc_length, arc_length, path[:, 1])
+
+        sampled_path = np.column_stack((x_initial, y_initial))
+        theta_initial = np.empty(self.mpc_cfg.T + 1, dtype=float)
+        if len(sampled_path) >= 3:
+            path_delta = sampled_path[2:] - sampled_path[:-2]
+            theta_initial[1:-1] = np.arctan2(
+                path_delta[:, 1],
+                path_delta[:, 0],
+            )
+            theta_initial[0] = theta_initial[1]
+            theta_initial[-1] = theta_initial[-2]
+        else:
+            path_delta = sampled_path[1] - sampled_path[0]
+            theta_initial[:] = np.arctan2(path_delta[1], path_delta[0])
+        theta_initial = np.unwrap(theta_initial)
+        theta_initial += 2.0 * np.pi * np.round(
+            (float(start_pose[2]) - theta_initial[0]) / (2.0 * np.pi)
+        )
+        theta_initial[0] = float(start_pose[2])
+
+        step_distances = np.linalg.norm(np.diff(sampled_path, axis=0), axis=1)
+        velocity_initial = np.clip(
+            step_distances / self.mpc_cfg.dt,
+            self.v_cfg.min_vel,
+            self.v_cfg.max_vel,
+        )
+        heading_change = np.diff(theta_initial)
+        travelled_distance = velocity_initial * self.mpc_cfg.dt
+        steering_initial = np.zeros(self.mpc_cfg.T, dtype=float)
+        moving = travelled_distance > 1e-9
+        steering_initial[moving] = np.arctan(
+            self.v_cfg.wheelbase
+            * heading_change[moving]
+            / travelled_distance[moving]
+        )
+        steering_initial = np.clip(
+            steering_initial,
+            -self.v_cfg.max_steer,
+            self.v_cfg.max_steer,
+        )
+        return (
+            x_initial,
+            y_initial,
+            theta_initial,
+            velocity_initial,
+            steering_initial,
+        )
+
+    def plan(self, start_pose, target_pos, obs_polygons, initial_path=None):
         opti = ca.Opti()
         T, dt = self.mpc_cfg.T, self.mpc_cfg.dt
         L_wheel = self.v_cfg.wheelbase
@@ -132,11 +218,30 @@ class NMPCPlanner:
                     
                     opti.subject_to(dist_approx + total_radius <= 0)
 
-        opti.set_initial(x, np.linspace(start_pose[0], target_pos[0], T + 1))
-        opti.set_initial(y, np.linspace(start_pose[1], target_pos[1], T + 1))
-        opti.set_initial(v, 2.0)
+        if initial_path is None:
+            # Preserve the original straight-line initialization by default.
+            opti.set_initial(x, np.linspace(start_pose[0], target_pos[0], T + 1))
+            opti.set_initial(y, np.linspace(start_pose[1], target_pos[1], T + 1))
+            opti.set_initial(v, 2.0)
+        else:
+            (
+                x_initial,
+                y_initial,
+                theta_initial,
+                velocity_initial,
+                steering_initial,
+            ) = self._prepare_path_initialization(
+                initial_path,
+                start_pose,
+                target_pos,
+            )
+            opti.set_initial(x, x_initial)
+            opti.set_initial(y, y_initial)
+            opti.set_initial(theta, theta_initial)
+            opti.set_initial(v, velocity_initial)
+            opti.set_initial(delta, steering_initial)
         
-        opts = {"ipopt.print_level": 0, "ipopt.sb": "yes", "print_time": 0, "ipopt.max_cpu_time": 300}
+        opts = {"ipopt.print_level": 0, "ipopt.sb": "yes", "print_time": 0, "ipopt.max_cpu_time": 3000}
         opti.solver("ipopt", opts)
         
         try:
@@ -286,7 +391,7 @@ if __name__ == "__main__":
         
     #     for _ in tqdm(results_iterator, total=len(indices)):
     #         pass
-    test_single(74)
+    test_single(12367)
     # # print("All tasks completed.")
     # analyze_results()
     # index = random.randint(0, 20000)

@@ -32,7 +32,7 @@ show_animation = False
 
 def obstacle_blowup_quadrilateral(obstacles, blowup_distance):
     """
-    对四边形障碍物进行膨胀，并强制保持四边形形状。
+    Inflate a quadrilateral obstacle while preserving its quadrilateral shape.
     """
     blown_up_obstacles = []
     for obs in obstacles:
@@ -245,7 +245,7 @@ class InformedRRTStar:
 
     def check_line_collision(self, node1, node2):
         """
-        检查 node1 到 node2 的连线是否与任何多边形障碍物碰撞
+        Check whether the segment from node1 to node2 collides with any polygonal obstacle.
         """
         p1 = np.array([node1.x, node1.y])
         p2 = np.array([node2.x, node2.y])
